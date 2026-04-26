@@ -2,6 +2,6 @@ logs/
 .ruff_cache/
 .venv/
 .env
-lilbmpv-2.dll
+libmpv-2.dll
 libmpv.dll.a
 *.lock
