@@ -4,12 +4,11 @@ A desktop music player (PyQt6 GUI) that streams from an OpenSubsonic server.
 
 ## Commands
 - `uv run music-player` — launch the GUI
-- `uv run music-agent` — launch the Claude coding assistant
 - `uv run pytest` — run tests
 
 ## Setup
 ```
-cp .env.example .env   # fill in SUBSONIC_* and ANTHROPIC_API_KEY
+cp .env.example .env   # fill in SUBSONIC_* 
 uv sync
 ```
 
