@@ -1,0 +1,11 @@
+# Ruff configuration for music-player
+line-length = 100
+exclude = [".venv", "build", "dist", "logs"]
+
+[lint]
+select = ["E", "F", "W", "I", "N", "D", "UP", "B", "A", "C4", "T20", "Q"]
+ignore = []
+
+[format]
+quote-style = "double"
+skip-magic-trailing-comma = false
