@@ -1,14 +1,14 @@
 # Music Player
 
-A desktop music player (PyQt6 GUI) that streams from an OpenSubsonic server.
+A desktop music player (PyQt6 GUI) that streams from an OpenSubsonic server (Navidrome).
 
 ## Commands
-- `uv run music-player` — launch the GUI
+- `uv run .\main.py` — launch the GUI
 - `uv run pytest` — run tests
 
 ## Setup
 ```
-cp .env.example .env   # fill in SUBSONIC_* 
+cp .env.example .env   # fill in SUBSONIC_SERVER_URL, SUBSONIC_USERNAME, SUBSONIC_PASSWORD
 uv sync
 ```
 
@@ -16,158 +16,208 @@ uv sync
 
 ## Architecture
 
+### Dependency Rule
+```
+domain      →  nothing outside stdlib
+repository  →  domain.ports only
+controller  →  domain.ports only
+services    →  domain + repository + controller  (composition root — wires concretions)
+ui          →  services, domain.ports, queue, image_store
+```
+Never import a concrete repository or backend class outside of `services.py`.
+
 ### Layer Decomposition
 
 ```
-Domain          player/audio.py         Track dataclass, AudioPlayer (mpv)
-                api/subsonic_sync.py    SubsonicSyncClient
-Application     ui/playback_controller  PlaybackController — audio, poll, lookahead, cover art
-                ui/library_controller   LibraryController — worker spawning, search
-Infrastructure  ui_settings.py          UISettings persistence (JSON)
-                ui/theme.py             build_stylesheet() CSS generation
-                ui/workers/             QThread workers (one API call each)
-                logging.py              get_logger
-Interface       ui/app.py               MusicPlayerWindow — layout + signal wiring only
-                ui/components/          Pages and shared widgets
+Domain        domain/track.py               Track frozen dataclass + from_subsonic() factory
+              domain/ports.py               AudioPort, StreamPort, MusicLibraryPort (Protocols)
+              domain/audio_player.py        MpvAudioBackend — implements AudioPort via libmpv
+
+Repository    repository/_http.py           SubsonicHttp — token auth + HTTP transport (internal only)
+              repository/music_repository.py SubsonicMusicRepository — implements both ports
+              repository/subsonic_client.py  SubsonicClient = SubsonicMusicRepository (compat alias)
+
+Controller    controller/playback_controller.py  PlaybackController(audio: AudioPort, stream: StreamPort)
+
+Composition   services.py                   get_repository(), get_audio_backend(), get_playback_controller()
+
+Persistence   queue.py                      PlayQueue — JSON queue at ~/.music-player/queue.json
+              image_store.py                In-memory dict + SQLite at ~/.music-player/image_cache.db
+              image_cache.py                SQLite CRUD (used by image_store only, not directly)
+
+Interface     ui/app.py                     MusicPlayerWindow — QStackedWidget + sidebar nav
+              ui/loading_screen.py          LoadingScreen — StartupCacheWorker progress display
+              ui/components/                Pages + shared widgets (see UI Files below)
+              ui/workers/                   QThread workers (one network call each)
 ```
+
+---
 
 ### Core Files
 | File | Purpose |
 |------|---------|
-| `src/music_player/config.py` | `Settings` loaded from `.env` via pydantic-settings |
-| `src/music_player/api/subsonic.py` | `SubsonicClient` — async httpx wrapper (not used in UI) |
-| `src/music_player/api/subsonic_sync.py` | `SubsonicSyncClient` — sync httpx wrapper used by all workers |
-| `src/music_player/player/audio.py` | `AudioPlayer` (mpv backend) + `Track` dataclass |
-| `src/music_player/logging.py` | Centralized logging setup (`get_logger`) |
-| `src/music_player/ui_settings.py` | `UISettings` dataclass + `load_ui_settings`/`save_ui_settings` (JSON at `~/.music-player/`) |
-| `src/music_player/ui/theme.py` | `build_stylesheet()` — generates full CSS from `DARK`/`LIGHT` palette + accent color |
-| `src/agent/` | Claude `claude-opus-4-7` coding assistant for this project |
+| `domain/track.py` | `Track(id, title, artist, album, duration, track_number, cover_art_id)` — frozen; `Track.from_subsonic(dict)` factory |
+| `domain/ports.py` | `AudioPort`, `StreamPort`, `MusicLibraryPort` — `@runtime_checkable` Protocol definitions |
+| `domain/audio_player.py` | `MpvAudioBackend` — implements `AudioPort`; `AudioPlayer = MpvAudioBackend` alias |
+| `repository/_http.py` | `SubsonicHttp` — token auth (`md5(password+salt)`), `get()`, `get_bytes()`, `stream_url()` |
+| `repository/music_repository.py` | `SubsonicMusicRepository` — all Subsonic API calls; implements `MusicLibraryPort` + `StreamPort` |
+| `repository/subsonic_client.py` | `SubsonicClient = SubsonicMusicRepository` — backward-compat shim for workers |
+| `controller/playback_controller.py` | `PlaybackController(audio, stream)` — inject-only, no concrete imports |
+| `services.py` | Composition root — creates and wires `MpvAudioBackend` + `SubsonicMusicRepository` → `PlaybackController` |
+| `queue.py` | `PlayQueue` — tracks as plain dicts (id, title, artist, album, duration, coverArt); `get_queue()` singleton |
+| `image_store.py` | Module-level memory store: `preload()`, `put()`, `get()`, `get_decoded()`, `decode_artist_images()`, `set_artists()`, `get_artists()` |
+| `image_cache.py` | `ImageCache` — SQLite CRUD wrapper; only used by `image_store` |
+| `logging.py` | `get_logger(__name__)` — file + console output to `./logs/music_player.log` |
 
 ### UI Files
 | File | Purpose |
 |------|---------|
-| `src/music_player/ui/app.py` | `MusicPlayerWindow` — layout + signal wiring only |
-| `src/music_player/ui/playback_controller.py` | `PlaybackController` — audio, poll timer, lookahead, cover art |
-| `src/music_player/ui/library_controller.py` | `LibraryController` — worker spawning, active-worker tracking, search |
-| `src/music_player/ui/components/player_bar.py` | `PlayerBar` — transport, progress, volume |
-| `src/music_player/ui/components/sidebar.py` | `Sidebar` — navigation list |
-| `src/music_player/ui/components/track_table.py` | `TrackTable` — shared track listing with pulse animation |
-| `src/music_player/ui/components/album_header.py` | `AlbumHeader` — cover art + metadata |
-| `src/music_player/ui/components/artists_page.py` | `ArtistsPage` — 3-pane: artists | albums | tracks |
-| `src/music_player/ui/components/playlist_page.py` | `PlaylistPage` — 2-pane: playlists | tracks |
-| `src/music_player/ui/components/queue_page.py` | `QueuePage` — current queue with Now Playing header |
-| `src/music_player/ui/components/settings_page.py` | `SettingsPage` — appearance, playback, server info |
-| `src/music_player/ui/components/utils.py` | `load_album_tracks_for_table()` + formatting helpers |
+| `ui/app.py` | `MusicPlayerWindow` — `QStackedWidget` page nav + sidebar; layout and wiring only |
+| `ui/loading_screen.py` | `LoadingScreen` — full-window splash; drives `StartupCacheWorker`; emits `ready()` |
+| `ui/components/player_bar.py` | `PlayerBar` (80 px, 2-row): row 1 = art + info + transport + volume; row 2 = teal progress bar |
+| `ui/components/playback_bridge.py` | `PlaybackBridge` (QObject singleton) — 500 ms poll, queue advance on EOF, all playback signals |
+| `ui/components/track_table.py` | `TrackTable` — shared track listing; double-click plays, right-click context menu; expands to full row count |
+| `ui/components/flow_grid.py` | `FlowGrid` — responsive `QGridLayout` wrapper; re-columns on `resizeEvent` |
+| `ui/components/artists_page.py` | `ArtistsPage` — internal stack: artist grid (`FlowGrid`) ↔ artist detail |
+| `ui/components/artist_card.py` | `ArtistCard` (190×220) — 150 px circle image; `set_pixmap(QPixmap)` for pre-decoded images |
+| `ui/components/artist_detail_page.py` | Artist hero + ListenBrainz top 10 + discography (`FlowGrid`) + album track panel (`TrackTable`) |
+| `ui/components/musicbrainz_image.py` | `fetch_artist_image_bytes(name)` — Deezer first, iTunes fallback; no caching (caller's responsibility) |
 
 ### Worker Threads
 | File | Class(es) | Notes |
 |------|-----------|-------|
-| `src/music_player/ui/workers/artists.py` | `LoadArtistsWorker`, `LoadArtistAlbumsWorker` | One Subsonic call each |
-| `src/music_player/ui/workers/albums.py` | `LoadAlbumTracksWorker` | Used by Artists tab via `utils.py` |
-| `src/music_player/ui/workers/playlists.py` | `LoadPlaylistsWorker`, `LoadPlaylistTracksWorker` | |
-| `src/music_player/ui/workers/search.py` | `SearchWorker` | `search3` — populates Library tab |
-| `src/music_player/ui/workers/cover_art.py` | `LoadCoverArtWorker` | Accepts artist ID or song ID |
-| `src/music_player/ui/workers/lookahead.py` | `LookaheadWorker` | Warms next track stream URL |
+| `ui/workers/startup_cache.py` | `StartupCacheWorker` | Preload SQLite → fetch artists+albums in parallel → parallel image fetch (16 threads) → `decode_artist_images()` |
+| `ui/workers/artist_worker.py` | `ArtistListWorker` | `getArtists` → emits `list[dict]`; used as fallback if store is empty |
+| `ui/workers/artist_detail.py` | `LoadArtistAlbumsWorker`, `LoadTopTracksWorker` | Albums newest-first; top tracks via MusicBrainz MBID → ListenBrainz |
+| `ui/workers/album_tracks.py` | `LoadAlbumTracksWorker` | `getAlbum(id)` → emits `(list[dict], album_dict)` |
+| `ui/workers/image_loader.py` | `ImageQueueWorker` | Cache-first; Deezer/iTunes fallback; 8 parallel threads |
 
 ---
 
 ## Data Flow
 
-### Artists Tab (one API call per user action)
-- Tab open → `getArtists` → artist list
-- Artist click → `getArtist(id)` → album list + cover art
-- Album click → `getAlbum(id)` → `Track` list → `TrackTable`
+### Startup
+1. `main.py` shows `LoadingScreen`
+2. `StartupCacheWorker` runs:
+   - `image_store.preload()` — bulk-reads SQLite into RAM
+   - `get_artists()` + `get_all_albums()` fetched in parallel
+   - `image_store.set_artists(artists)` stores list for instant tab render
+   - Missing artist images fetched via Deezer/iTunes; missing album covers via `getCoverArt` — all in one 16-thread pool
+   - `image_store.decode_artist_images()` — decodes all artist bytes to circle-clipped `QImage` (8 threads, runs every startup)
+3. `LoadingScreen` emits `ready()` → main window shows
 
-### Library Tab (search-driven, zero startup calls)
-- User types 2+ chars → `SearchWorker` → `search3?query=<text>` → Library table
-- Clearing search clears the table
+### Artists Tab
+- First open: `ensure_loaded()` reads `image_store.get_artists()` (already in RAM)
+- Cards rendered in batches of 50 via `QTimer.singleShot(0, ...)` — UI stays responsive
+- Each card: `image_store.get_decoded(f"artist:{name.lower()}")` → `QPixmap.fromImage()` — no decode on main thread
+- Artist click → `LoadArtistAlbumsWorker` + `LoadTopTracksWorker` fire concurrently
+- Album click → `LoadAlbumTracksWorker` → `TrackTable` appears below discography
+- Revisiting the tab: stack index flip only — no reload
 
 ### Playback
-- Double-click track → `set_queue(all_tracks, start=row)` → `_play_track(track)`
-- `_poll_playback` (500 ms QTimer) → reads mpv `eof_reached`, `time_pos`, `duration`
-- Track end detected via `eof_reached` → `_next_track()`
-- 5 s after track start → `LookaheadWorker` warms next stream URL
+- Double-click track in `TrackTable` → `queue.set_queue(all_tracks, row)` → `bridge.play_track(track)`
+- `PlaybackBridge` → `PlaybackController.play_track(id)` → `SubsonicMusicRepository.get_stream_url(id)` → `MpvAudioBackend.play(url)`
+- `PlaybackBridge` polls every 500 ms: emits `position_changed` → `PlayerBar` updates slider/timestamps
+- EOF detected → `queue.advance()` → next track plays automatically
+- Queue persisted to `~/.music-player/queue.json` on every mutation; restored on next launch (no auto-play)
+
+### Image Cache Keys
+| Prefix | Source | Populated by |
+|--------|--------|--------------|
+| `artist:{name_lower}` | Deezer / iTunes | `StartupCacheWorker` |
+| `album:{coverArt_id}` | Subsonic `getCoverArt` | `StartupCacheWorker` |
 
 ---
 
-## Track Dataclass (`player/audio.py`)
+## SubsonicMusicRepository Methods
+| Method | Endpoint | Notes |
+|--------|----------|-------|
+| `get_stream_url(id)` | `stream.view` | Session-scoped URL with auth tokens; never cache |
+| `get_artists()` | `getArtists` | Flattens A-Z index grouping |
+| `get_artist(id)` | `getArtist` | Returns dict with `album: [...]` list |
+| `get_album(id)` | `getAlbum` | Returns dict with `song: [...]` list |
+| `get_all_albums()` | `getAlbumList2` | Paginated internally (500/page) |
+| `get_cover_art(id, size)` | `getCoverArt` | Accepts song, album, or artist ID; 404 → `httpx.HTTPStatusError` |
+| `ping()` | `ping.view` | Returns bool; used for health check |
+
+## OpenSubsonic Auth
+Token-based per-request: `t = md5(password + salt)`, `s = secrets.token_hex(8)`.
+All requests include `?u=&t=&s=&v=1.16.1&c=music-player&f=json`.
+Implemented in `SubsonicHttp._auth_params()` — never duplicated elsewhere.
+
+---
+
+## Track Dataclass (`domain/track.py`)
 ```python
-@dataclass
+@dataclass(frozen=True)
 class Track:
     id: str
     title: str
     artist: str
     album: str
-    duration: int       # seconds
-    stream_url: str     # built by client.stream_url(song_id) — valid indefinitely
+    duration: int          # seconds
+    track_number: int | None = None
+    cover_art_id: str = ""
 ```
-All workers that emit tracks **must** produce `list[Track]` (not raw dicts).
-Always build `stream_url` via `self._client.stream_url(song.get("id", ""))`.
+- `stream_url` is **not stored** — rebuilt fresh each play via `StreamPort.get_stream_url(id)`
+- Use `Track.from_subsonic(song_dict)` to construct from API responses
+- Workers and `TrackTable` currently use raw `dict` from Subsonic; convert with `Track.from_subsonic()` when domain logic is needed
+
+## Queue Track Format
+`PlayQueue` stores plain dicts (not `Track` objects) to simplify JSON serialization:
+```python
+{"id": str, "title": str, "artist": str, "album": str, "duration": int, "coverArt": str}
+```
+`_strip()` in `queue.py` enforces these fields; `stream_url` is never persisted.
 
 ---
 
-## Known Anti-Patterns & Failure Points
+## Glyphs — no emoji in the UI
 
-### 🔴 Critical
+- **Never use emoji (U+1F000+ range) in any UI string.**  Emoji render as coloured images on Windows 11 and look out of place in a dark desktop app.
+- **Never use ambiguous Unicode symbols** that emoji fonts intercept: ▶ (U+25B6), ⏭ (U+23ED), ☁ (U+2601), ♡ (U+2661), ☰ (U+2630), 🔊, etc.
+- **Always import from `src.music_player.ui.glyphs`** — that module is the single source of all UI symbols.  All constants are Segoe MDL2 Assets code points (U+E000–U+F8FF, Private Use Area) which are never intercepted by emoji fonts.
+- **Apply `font-family` with MDL2 first** on any widget that mixes glyphs and Latin text (menus, list items): use `MDL2_FAMILY_CSS` from `glyphs.py` in the stylesheet so Qt's per-character fallback picks glyphs from MDL2 and letters from Segoe UI.
+- **Buttons that show only a glyph** (transport controls, icon buttons) must have `QFont(MDL2_FONT, size)` set explicitly via `_mdl2(size)`.
 
-### 🟠 High
+```python
+# correct
+from src.music_player.ui.glyphs import PLAY, NEXT, SEARCH, MDL2_FONT, MDL2_FAMILY_CSS
+menu.addAction(f"{SEARCH}  Find…")
+btn.setFont(QFont(MDL2_FONT, 12))
 
-**`utils.py` couples UI to worker implementation**
-— `load_album_tracks_for_table()` directly imports `LoadAlbumTracksWorker`. A UI utility should not depend on a concrete worker class.
-
-### 🟡 Medium
-
-**Inconsistent worker cleanup**
-— `_active_workers` tracks playlist/artist/search workers but not `_cover_worker` or `_lookahead_worker`. `closeEvent` won't join them properly on rapid exit.
-
-**`SettingsPage.stylesheet_changed` connects directly to `QApplication.setStyleSheet`**
-— Global app state mutated by a component-level signal. Intermediate handler in `MusicPlayerWindow` would allow validation, logging, and future batching.
-
-### 🟢 Low
-
-**Hardcoded timeouts** — API: 30 s (`subsonic_sync.py:29`), lookahead: 20 s (`lookahead.py:20`). Move to `Settings` or `UISettings`.
-
-**Title/artist truncation hardcoded to 22 chars** (`player_bar.py:184-185`). Should derive from widget width or be a constant.
-
----
-
-## OpenSubsonic Auth
-Token-based: `t = md5(password + salt)`, `s = random_salt`. All requests include
-`?u=&t=&s=&v=1.16.1&c=music-player&f=json`.
-
-## SubsonicSyncClient Methods
-| Method | Subsonic Endpoint |
-|--------|------------------|
-| `get_artists()` | `getArtists` — full artist index |
-| `get_artist(id)` | `getArtist` — returns artist dict with `"album": [...]` |
-| `get_album(id)` | `getAlbum` — returns album dict with `"song": [...]` |
-| `get_all_songs(page_size)` | `search3?query=""` paginated |
-| `get_song(id)` | `getSong` |
-| `get_cover_art(id)` | `getCoverArt` — accepts song ID, album ID, or artist ID |
-| `get_playlists()` | `getPlaylists` |
-| `get_playlist(id)` | `getPlaylist` |
-| `search(query)` | `search3` |
-| `stream_url(id)` | builds stream URL with auth params (valid indefinitely) |
-
----
+# wrong — emoji or ambiguous symbol
+menu.addAction("🔍  Find…")
+btn.setText("▶")
+```
 
 ## Conventions
 
-- **Always ensure `logger = get_logger(__name__)` is defined at the top of each module before use.**
-- If you encounter a NameError or missing import for logger or any other shared utility, add the correct import and initialization at the top of the file without asking.
-- PyQt6 only (not PyQt5, not PySide6)
-- Sync httpx (`SubsonicSyncClient`) in `QThread.run()` only — never block the main thread
-- Full type hints on all public functions
-- Config never hardcoded — always from `Settings` or `UISettings`
-- No `print()` — use `logger` or `self._status_label.setText()`
-- All logging via `from music_player.logging import get_logger`
-- Logs written to `./logs/music_player.log`
+- **All imports use the `src.music_player` prefix** — package runs from source (not installed).
+- **`logger = get_logger(__name__)` at the top of every module** — add it without asking if missing.
+- **`pyqtSlot` must be imported at module level** in any file that uses `@pyqtSlot`. Missing it causes a `NameError` at class definition time. Always include it in the `from PyQt6.QtCore import ...` line, e.g. `from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot`. Never import it inside a method body.
+- PyQt6 only — never PyQt5 or PySide6.
+- HTTP calls in `QThread.run()` only — never block the main thread.
+- Full type hints on all public functions and methods.
+- No `print()` — use `logger.*` or a status label.
+- No hardcoded colors — the player bar uses `#2dd4bf` (teal) as accent; define as a module constant, not inline.
+- `image_store` is the single source of truth for images after startup — never open `ImageCache` directly in UI code.
+- `get_bridge()` is the single entry point for all playback operations from UI — never import `PlaybackController` in UI components.
 
 ## Consistency & Reuse
 
-- **Any change must be applied throughout the app for coherence.**
-- **Never duplicate logic — one canonical implementation per operation.**
-- `load_album_tracks_for_table()` in `utils.py` is the single entry point for album track loading — never inline a `LoadAlbumTracksWorker`.
-- `TrackTable` is the single shared component for all track listings.
-- All workers that produce tracks must emit `list[Track]` — never raw dicts.
-- All colors must come from `theme.py` palette via the stylesheet — never inline `setStyleSheet` with hardcoded hex values in components.
+- **Never duplicate logic** — one canonical implementation per operation.
+- `TrackTable` is the only track listing component — never build a custom one.
+- `FlowGrid` is the only responsive grid component — use it for any card grid.
+- `SubsonicMusicRepository` is the only Subsonic data access class — workers import `SubsonicClient` (alias).
+- Workers emit raw Subsonic dicts — callers use `Track.from_subsonic()` when they need domain objects.
+- Any change visible in one tab must be applied consistently across all tabs.
+
+## Known Anti-Patterns to Avoid
+
+- **Importing concrete classes across layer boundaries** — `PlaybackController` must never import `MpvAudioBackend` or `SubsonicMusicRepository`.
+- **Opening `ImageCache` in UI code** — use `image_store.get()` / `image_store.put()` only.
+- **Spawning one thread per card** — use `ImageQueueWorker` (pooled) or `StartupCacheWorker` (startup batch).
+- **Fixed column grids** — use `FlowGrid` so layouts adapt to window width.
+- **`set_image(bytes)` on the main thread for bulk rendering** — pre-decode with `image_store.decode_artist_images()` and use `set_pixmap(QPixmap.fromImage(...))` instead.
+- **Calling `QApplication.processEvents()`** — use `QTimer.singleShot(0, ...)` batch rendering instead.

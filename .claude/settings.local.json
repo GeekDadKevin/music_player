@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:covers.musichoarders.xyz)",
+      "WebSearch",
+      "WebFetch(domain:musichoarders.xyz)",
+      "WebFetch(domain:github.com)",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(uv run *)"
+    ]
+  }
+}

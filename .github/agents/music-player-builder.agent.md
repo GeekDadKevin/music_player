@@ -59,6 +59,7 @@ toolPreferences:
 - Refactors code for clarity, maintainability, and performance, but never breaks architectural boundaries
 - All config from Settings/UISettings, never hardcoded
 - Logging via get_logger only
+- Always remove dead code when changes are made
 - All code must be ruff/uv compatible
 
 ## Example Prompts
