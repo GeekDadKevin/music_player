@@ -9,5 +9,6 @@ https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260421/mpv-d
 Extract the DLLs (such as `libmpv-2.dll`) to your project root or a directory included in your PATH.
 
 ---
+This isn't awesome
 
 Continue with the rest of your setup and usage instructions here.
