@@ -38,9 +38,8 @@ _STEREO = 2
 
 # ── project-local lib directory ───────────────────────────────────────────
 
-# milkdrop_widget.py lives at src/music_player/ui/components/
-# Project root is 4 parents up.
-_PROJECT_LIB_DIR = Path(__file__).parents[4] / "lib" / "projectm"
+from src.music_player._paths import app_root as _app_root
+_PROJECT_LIB_DIR = _app_root() / "lib" / "projectm"
 
 # Prepend lib/projectm/ to PATH so Windows can find delay-loaded dependencies
 # (glew32.dll, PocoFoundation.dll, freetype.dll, etc.) when projectm_create()

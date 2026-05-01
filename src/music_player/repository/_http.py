@@ -49,7 +49,8 @@ class SubsonicHttp:
     """
 
     def __init__(self) -> None:
-        load_dotenv()
+        from src.music_player._paths import app_root as _app_root
+        load_dotenv(_app_root() / ".env")
         self.server_url = os.getenv("SUBSONIC_SERVER_URL", "").rstrip("/")
         self.username = os.getenv("SUBSONIC_USERNAME", "")
         self._password = os.getenv("SUBSONIC_PASSWORD", "")

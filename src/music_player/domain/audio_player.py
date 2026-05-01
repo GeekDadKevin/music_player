@@ -24,9 +24,8 @@ from src.music_player.logging import get_logger
 
 # Windows: libmpv-2.dll lives in lib/mpv/ — prepend it to PATH before
 # importing the binding so ctypes finds it without a system install.
-_lib_dir = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib", "mpv")
-)
+from src.music_player._paths import app_root as _app_root
+_lib_dir = str(_app_root() / "lib" / "mpv")
 os.environ["PATH"] = _lib_dir + os.pathsep + os.environ.get("PATH", "")
 
 import mpv  # noqa: E402
