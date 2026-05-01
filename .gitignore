@@ -12,3 +12,5 @@ lib/projectm/*.dll
 lib/projectm/*.so*
 lib/projectm/*.dylib
 lib/projectm/*.exe
+dist/
+
