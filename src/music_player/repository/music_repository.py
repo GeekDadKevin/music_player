@@ -374,6 +374,30 @@ class SubsonicMusicRepository:
             logger.warning(f"get_lyrics({title!r}) failed: {exc}")
         return ""
 
+    def scrobble(self, song_id: str) -> None:
+        """Submit a completed play to the server (updates server play counts)."""
+        import time
+        try:
+            self._http.get("scrobble.view", {
+                "id":         song_id,
+                "time":       int(time.time() * 1000),
+                "submission": "true",
+            }, timeout=10.0)
+            logger.debug(f"scrobble: submitted {song_id}")
+        except Exception as exc:
+            logger.warning(f"scrobble({song_id}) failed: {exc}")
+
+    def update_now_playing(self, song_id: str) -> None:
+        """Notify the server that this song is now playing (no play-count change)."""
+        try:
+            self._http.get("scrobble.view", {
+                "id":         song_id,
+                "submission": "false",
+            }, timeout=10.0)
+            logger.debug(f"scrobble: now-playing {song_id}")
+        except Exception as exc:
+            logger.warning(f"update_now_playing({song_id}) failed: {exc}")
+
     def ping(self) -> bool:
         """Return True if the server is reachable and credentials are valid."""
         try:

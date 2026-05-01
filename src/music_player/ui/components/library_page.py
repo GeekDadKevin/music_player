@@ -39,10 +39,10 @@ logger = get_logger(__name__)
 
 _TABS = [
     "Highlights",
-    "Favorite Tracks",
-    "Most Played",
     "Artists",
     "Genres",
+    "Favorite Tracks",
+    "Most Played",
     "Listening History",
 ]
 
@@ -251,15 +251,15 @@ class LibraryPage(QWidget):
         self._highlights.playlist_selected.connect(self.playlist_selected)
         self._highlights.genre_selected.connect(self._show_genre)
         self._content.addWidget(self._highlights)                  # Highlights
-        self._fav_tab = FavoriteTracksTab()
-        self._content.addWidget(self._fav_tab)                     # Favorite Tracks
-        self._content.addWidget(MostPlayedTab())                   # Most Played
         self._artists_tab = ArtistsTab()
         self._artists_tab.artist_selected.connect(self._show_artist)
         self._content.addWidget(self._artists_tab)                 # Artists
         self._genres_tab = GenreTab()
         self._genres_tab.genre_selected.connect(self._show_genre)
         self._content.addWidget(self._genres_tab)                  # Genres
+        self._fav_tab = FavoriteTracksTab()
+        self._content.addWidget(self._fav_tab)                     # Favorite Tracks
+        self._content.addWidget(MostPlayedTab())                   # Most Played
         self._content.addWidget(ListeningHistoryTab())             # Listening History
         root.addWidget(self._content, stretch=1)
 
@@ -740,7 +740,8 @@ class _GenreCard(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
     def mousePressEvent(self, event) -> None:
-        self.clicked.emit(self._genre)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._genre)
         super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:
@@ -851,7 +852,8 @@ class _PlaylistCard(QWidget):
             self._art.setStyleSheet("border-radius:4px;")
 
     def mousePressEvent(self, event) -> None:
-        self.clicked.emit(self._pl_id, self._name)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._pl_id, self._name)
         super().mousePressEvent(event)
 
 
@@ -905,7 +907,8 @@ class _ArtistCard(QWidget):
             layout.addWidget(cl)
 
     def mousePressEvent(self, event) -> None:
-        self.clicked.emit(self._data)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._data)
         super().mousePressEvent(event)
 
 
@@ -1037,6 +1040,8 @@ class _HistoryTable(QTableWidget):
             }
         """)
         self.doubleClicked.connect(self._on_double_click)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
 
     def set_entries(self, entries: list[dict]) -> None:
         self._entries = entries
@@ -1062,9 +1067,38 @@ class _HistoryTable(QTableWidget):
             from src.music_player.ui.components.playback_bridge import get_bridge
             from src.music_player.queue import get_queue
             entry = self._entries[row]
-            # Build a playable track list from the full history for prev/next
             get_queue().set_queue(self._entries, start=row)
             get_bridge().play_track(entry)
+
+    def _on_context_menu(self, pos) -> None:
+        row = self.rowAt(pos.y())
+        if row < 0 or row >= len(self._entries):
+            return
+        from PyQt6.QtWidgets import QMenu
+        from src.music_player.queue import get_queue
+        from src.music_player.ui.components.playback_bridge import get_bridge
+        from src.music_player.ui.glyphs import ADD, NEXT, PLAY
+        entry = self._entries[row]
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu{{background:#1a1a1e;color:#ddd;border:1px solid #2a2a2e;"
+            f"font-family:{MDL2_FAMILY_CSS};}}"
+            "QMenu::item{padding:6px 18px;}"
+            "QMenu::item:selected{background:#2dd4bf;color:#000;}"
+        )
+        play_now  = menu.addAction(f"{PLAY}  Play Now")
+        play_next = menu.addAction(f"{NEXT}  Play Next")
+        add_queue = menu.addAction(f"{ADD}  Add to Queue")
+        action = menu.exec(self.mapToGlobal(pos))
+        if action == play_now:
+            get_queue().set_queue(self._entries, start=row)
+            get_bridge().play_track(entry)
+        elif action == play_next:
+            q = get_queue()
+            q.tracks.insert(q.current_index + 1, entry)
+            q._save()
+        elif action == add_queue:
+            get_queue().add_track(entry)
 
 
 def _relative_time(played_at: str) -> str:
@@ -1397,7 +1431,8 @@ class _AlbumGridCard(QWidget):
             self._img.setStyleSheet("border-radius:6px;")
 
     def mousePressEvent(self, event) -> None:
-        self.clicked.emit(self._data)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._data)
         super().mousePressEvent(event)
 
 

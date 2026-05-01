@@ -78,6 +78,7 @@ class PlaybackBridge(QObject):
         self.playback_state_changed.emit(True)
         self.star_state_changed.emit(track.get("id", "") in self._starred_ids)
         logger.info(f"play_track: {track.get('title')!r}")
+        self._server_scrobble(track["id"], submission=False)
 
     def play_pause(self) -> None:
         if self._current_track is None:
@@ -145,6 +146,22 @@ class PlaybackBridge(QObject):
         if time_pos >= threshold:
             self._play_counted = True
             record_play(self._current_track, int(time_pos))
+            self._server_scrobble(self._current_track["id"], submission=True)
+
+    def _server_scrobble(self, song_id: str, submission: bool) -> None:
+        """Fire-and-forget server scrobble; never blocks the UI thread."""
+        import threading
+        from src.music_player.ui.app_settings import load_settings
+        if not load_settings().scrobble_enabled:
+            return
+        from src.music_player.services import get_repository
+        def _do() -> None:
+            repo = get_repository()
+            if submission:
+                repo.scrobble(song_id)
+            else:
+                repo.update_now_playing(song_id)
+        threading.Thread(target=_do, daemon=True).start()
 
     # ── starred / heart ───────────────────────────────────────────────
 
@@ -201,6 +218,13 @@ class PlaybackBridge(QObject):
 
     def _on_track_ended(self) -> None:
         logger.info("Track ended — advancing queue")
+        # Scrobble now if threshold was never crossed (short track, late skip, etc.)
+        if not self._play_counted and self._current_track:
+            from src.music_player.repository.play_history_db import record_play
+            secs = int(self._controller.time_pos or 0)
+            record_play(self._current_track, secs)
+            self._server_scrobble(self._current_track["id"], submission=True)
+            self._play_counted = True
         self.status_message.emit("")
         nxt = get_queue().advance()
         if nxt:

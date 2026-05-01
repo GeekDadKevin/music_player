@@ -238,7 +238,7 @@ class _PlaylistItem(QWidget):
         super().leaveEvent(event)
 
     def contextMenuEvent(self, event) -> None:
-        self.context_menu_requested.emit(event.globalPosition().toPoint())
+        self.context_menu_requested.emit(event.globalPos())
 
 
 class SidebarWidget(QWidget):
