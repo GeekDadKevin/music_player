@@ -1,3 +1,32 @@
+def _dark_palette():
+    from PyQt6.QtGui import QColor, QPalette
+    p = QPalette()
+    # Base surfaces
+    p.setColor(QPalette.ColorRole.Window,        QColor("#111114"))
+    p.setColor(QPalette.ColorRole.Base,          QColor("#0a0a0d"))
+    p.setColor(QPalette.ColorRole.AlternateBase, QColor("#1e1e22"))
+    p.setColor(QPalette.ColorRole.Button,        QColor("#1e1e22"))
+    p.setColor(QPalette.ColorRole.Mid,           QColor("#1a1a1e"))
+    p.setColor(QPalette.ColorRole.Dark,          QColor("#0a0a0d"))
+    # Text
+    p.setColor(QPalette.ColorRole.WindowText,    QColor("#cccccc"))
+    p.setColor(QPalette.ColorRole.Text,          QColor("#cccccc"))
+    p.setColor(QPalette.ColorRole.ButtonText,    QColor("#cccccc"))
+    p.setColor(QPalette.ColorRole.BrightText,    QColor("#ffffff"))
+    p.setColor(QPalette.ColorRole.ToolTipBase,   QColor("#1e1e22"))
+    p.setColor(QPalette.ColorRole.ToolTipText,   QColor("#cccccc"))
+    # Accent
+    p.setColor(QPalette.ColorRole.Highlight,        QColor("#2dd4bf"))
+    p.setColor(QPalette.ColorRole.HighlightedText,  QColor("#000000"))
+    p.setColor(QPalette.ColorRole.Link,             QColor("#2dd4bf"))
+    # Disabled state
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
+                 QPalette.ColorRole.ButtonText):
+        p.setColor(QPalette.ColorGroup.Disabled, role, QColor("#555555"))
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Button, QColor("#18181b"))
+    return p
+
+
 def main():
     import os
     import sys
@@ -26,6 +55,10 @@ def main():
 
     install_dns_cache()
     app = QApplication(sys.argv)
+    # Fusion style + explicit dark palette forces dark rendering on all platforms
+    # regardless of the OS light/dark mode setting.
+    app.setStyle("Fusion")
+    app.setPalette(_dark_palette())
 
     window = MusicPlayerWindow()
     loading = LoadingScreen()
