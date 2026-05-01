@@ -4,13 +4,6 @@ logs/
 .env
 *.lock
 # Native binaries — stored in lib/ but not committed
-lib/mpv/*.dll
-lib/mpv/*.dll.a
-lib/mpv/*.so*
-lib/mpv/*.dylib
-lib/projectm/*.dll
-lib/projectm/*.so*
-lib/projectm/*.dylib
-lib/projectm/*.exe
+lib/
 dist/
 
