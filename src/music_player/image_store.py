@@ -56,8 +56,13 @@ def has(key: str) -> bool:
 def put(key: str, data: bytes, source: str) -> None:
     _images[key] = data
     try:
+        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(_DB_PATH)
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS images"
+            "(key TEXT PRIMARY KEY, data BLOB NOT NULL, source TEXT NOT NULL)"
+        )
         conn.execute(
             "INSERT OR REPLACE INTO images(key, data, source) VALUES(?,?,?)",
             (key, data, source),
