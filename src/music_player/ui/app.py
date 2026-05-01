@@ -1,7 +1,7 @@
-import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QSettings, pyqtSlot
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QHBoxLayout, QMainWindow,
     QSplitter, QStackedWidget, QVBoxLayout, QWidget,
@@ -113,6 +113,7 @@ class MusicPlayerWindow(QMainWindow):
         self._viz_fullscreen = False
         self._stack.setCurrentIndex(_IDX_BROWSE)
         self._restore_state()
+        self._setup_media_shortcuts()
 
     # ── window state persistence ──────────────────────────────────────
 
@@ -219,34 +220,19 @@ class MusicPlayerWindow(QMainWindow):
         self._viz_panel.set_fullscreen_active(False)
         self._viz_fullscreen = False
 
+    def _setup_media_shortcuts(self) -> None:
+        from src.music_player.ui.components.playback_bridge import get_bridge
+        bridge = get_bridge()
+        for key in (Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaTogglePlayPause):
+            QShortcut(QKeySequence(key), self).activated.connect(bridge.play_pause)
+        QShortcut(QKeySequence(Qt.Key.Key_MediaNext), self).activated.connect(bridge.next_track)
+        QShortcut(QKeySequence(Qt.Key.Key_MediaPrevious), self).activated.connect(bridge.previous_track)
+        QShortcut(QKeySequence(Qt.Key.Key_MediaStop), self).activated.connect(bridge.stop)
+
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape and self._viz_fullscreen:
             self._exit_viz_fullscreen()
         else:
             super().keyPressEvent(event)
-
-    def nativeEvent(self, event_type: bytes, message) -> tuple[bool, int]:
-        if sys.platform == "win32" and event_type == b"windows_generic_MSG":
-            import ctypes
-            import ctypes.wintypes
-            msg = ctypes.wintypes.MSG.from_address(int(message))
-            if msg.message == 0x0319:  # WM_APPCOMMAND
-                cmd = (msg.lParam >> 16) & 0x0FFF
-                from src.music_player.ui.components.playback_bridge import get_bridge
-                bridge = get_bridge()
-                # APPCOMMAND constants
-                if cmd == 14:    # MEDIA_PLAY_PAUSE
-                    bridge.play_pause()
-                    return True, 0
-                if cmd == 11:    # MEDIA_NEXTTRACK
-                    bridge.next_track()
-                    return True, 0
-                if cmd == 12:    # MEDIA_PREVIOUSTRACK
-                    bridge.previous_track()
-                    return True, 0
-                if cmd == 13:    # MEDIA_STOP
-                    bridge.stop()
-                    return True, 0
-        return super().nativeEvent(event_type, message)
 
 
