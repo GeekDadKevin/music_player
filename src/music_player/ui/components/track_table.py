@@ -233,7 +233,7 @@ class TrackTable(QTableWidget):
         from src.music_player.ui.app_settings import load_settings
         s = load_settings()
         if row in self._unmatched:
-            f, colour = QFont(), QColor("#444")
+            f, colour = QFont(), QColor(s.missing_track_color)
             f.setStrikeOut(True)
         elif row < len(self._tracks) and self._tracks[row].get("_missing"):
             f, colour = QFont(), QColor(s.missing_track_color)
@@ -254,8 +254,9 @@ class TrackTable(QTableWidget):
         row = index.row()
         if row in self._unmatched or row >= len(self._tracks):
             return
-        if self._tracks[row].get("_missing"):
-            self._play_missing(self._tracks[row])
+        t = self._tracks[row]
+        if t.get("_missing") or t.get("id", "").startswith("ext-"):
+            self._play_missing(t)
             return
 
         track = self._tracks[row]
@@ -327,9 +328,14 @@ class TrackTable(QTableWidget):
                 self.search_requested.emit(row, self._raw[row])
             return
 
-        if row < len(self._tracks) and self._tracks[row].get("_missing"):
+        if row < len(self._tracks) and (
+            self._tracks[row].get("_missing") or
+            self._tracks[row].get("id", "").startswith("ext-")
+        ):
             t        = self._tracks[row]
-            auto_act = menu.addAction(f"{SEARCH}  Auto-search")
+            is_ext   = t.get("id", "").startswith("ext-")
+            auto_lbl = f"{SEARCH}  Download and play" if is_ext else f"{SEARCH}  Auto-search"
+            auto_act = menu.addAction(auto_lbl)
             find_act = menu.addAction(f"{SEARCH}  Search manually…")
             chosen   = menu.exec(self.mapToGlobal(pos))
             if chosen == auto_act:
