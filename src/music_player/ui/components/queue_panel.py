@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 
 from src.music_player.logging import get_logger
 from src.music_player.queue import get_queue
+from src.music_player.ui.components.playback_bridge import get_bridge
 
 logger = get_logger(__name__)
 
@@ -57,6 +58,9 @@ class QueuePanel(QWidget):
         root.addWidget(header)
 
         self._table = TrackTable()
+        # Queue view: double-click jumps to that position — never adds duplicates.
+        self._table.doubleClicked.disconnect(self._table._on_double_click)
+        self._table.doubleClicked.connect(self._jump_to_row)
         root.addWidget(self._table, stretch=1)
 
         self.refresh()
@@ -79,6 +83,14 @@ class QueuePanel(QWidget):
                 self._table.highlight_track_id(tid)
 
     # ── slots ───────────────────────────────────────────────────────────
+
+    def _jump_to_row(self, index) -> None:
+        row = index.row()
+        q = get_queue()
+        if 0 <= row < len(q.tracks):
+            q.current_index = row
+            q._save()
+            get_bridge().play_track(q.tracks[row])
 
     @pyqtSlot(dict)
     def _on_track_changed(self, _track: dict) -> None:

@@ -32,7 +32,7 @@ from src.music_player.repository.play_history_db import (
 from src.music_player.ui.app_settings import load_settings, settings_signals
 from src.music_player.ui.components.artist_detail_page import ArtistDetailPage
 from src.music_player.ui.glyphs import (
-    CHEVRON_LEFT, CHEVRON_RIGHT, MDL2_FAMILY_CSS, MDL2_FONT, SHUFFLE,
+    CHEVRON_LEFT, CHEVRON_RIGHT, MDL2_FAMILY_CSS, MDL2_FONT, SETTINGS, SHUFFLE,
 )
 
 logger = get_logger(__name__)
@@ -205,6 +205,20 @@ class LibraryPage(QWidget):
         top_row.addStretch()
         self._shuffle_btn = self._make_shuffle_btn()
         top_row.addWidget(self._shuffle_btn)
+
+        gear_btn = QPushButton(SETTINGS)
+        gear_btn.setFont(QFont(MDL2_FONT, 14))
+        gear_btn.setFixedSize(36, 36)
+        gear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        gear_btn.setToolTip("Settings")
+        gear_btn.setStyleSheet(
+            "QPushButton{background:transparent;color:#666;border:none;"
+            "border-radius:18px;}"
+            "QPushButton:hover{color:#fff;background:#1e1e22;}"
+        )
+        gear_btn.clicked.connect(self._open_settings)
+        top_row.addWidget(gear_btn)
+
         root.addLayout(top_row)
         root.addSpacing(16)
 
@@ -328,6 +342,10 @@ class LibraryPage(QWidget):
         dlg = SearchResultsDialog(text, parent=self)
         dlg.exec()
         self._search_bar.clear()
+
+    def _open_settings(self) -> None:
+        from src.music_player.ui.components.settings_dialog import SettingsDialog
+        SettingsDialog(parent=self).exec()
 
     def _on_settings_changed(self) -> None:
         color = load_settings().highlight_color
@@ -1095,7 +1113,20 @@ class QueueTab(QWidget):
         self._status.setStyleSheet("color:#555; font-size:12px; background:transparent;")
         root.addWidget(self._status)
         self._table = TrackTable()
+        # Queue view: double-click jumps to that position — never adds duplicates.
+        self._table.doubleClicked.disconnect(self._table._on_double_click)
+        self._table.doubleClicked.connect(self._jump_to_row)
         root.addWidget(self._table, stretch=1)
+
+    def _jump_to_row(self, index) -> None:
+        from src.music_player.queue import get_queue
+        from src.music_player.ui.components.playback_bridge import get_bridge
+        row = index.row()
+        q = get_queue()
+        if 0 <= row < len(q.tracks):
+            q.current_index = row
+            q._save()
+            get_bridge().play_track(q.tracks[row])
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

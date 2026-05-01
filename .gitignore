@@ -2,6 +2,13 @@ logs/
 .ruff_cache/
 .venv/
 .env
-libmpv-2.dll
-libmpv.dll.a
 *.lock
+# Native binaries — stored in lib/ but not committed
+lib/mpv/*.dll
+lib/mpv/*.dll.a
+lib/mpv/*.so*
+lib/mpv/*.dylib
+lib/projectm/*.dll
+lib/projectm/*.so*
+lib/projectm/*.dylib
+lib/projectm/*.exe

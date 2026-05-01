@@ -7,7 +7,23 @@
       "WebFetch(domain:github.com)",
       "Bash(python3 *)",
       "Bash(python *)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(git checkout *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:pypi.org)",
+      "Bash(curl -s https://api.github.com/repos/projectM-visualizer/projectm/contents/src/api/include/projectM-4)",
+      "Bash(curl -s https://raw.githubusercontent.com/projectM-visualizer/projectm/master/src/api/include/projectM-4/user_sprites.h)",
+      "Bash(curl -s https://api.github.com/repos/projectM-visualizer/projectm/contents/src)",
+      "Bash(curl -s https://api.github.com/repos/projectM-visualizer/projectm/contents/src/playlist)",
+      "Bash(curl -s https://raw.githubusercontent.com/projectM-visualizer/projectm/master/src/playlist/include/projectM/PlaylistCWrapper.hpp)",
+      "Bash(curl -s https://raw.githubusercontent.com/projectM-visualizer/projectm/master/CMakeLists.txt)",
+      "Bash(curl -s https://raw.githubusercontent.com/projectM-visualizer/projectm/master/src/libprojectM/CMakeLists.txt)",
+      "Bash(curl *)",
+      "Bash(uv sync *)",
+      "WebFetch(domain:packages.msys2.org)",
+      "WebFetch(domain:vcpkg.io)",
+      "WebFetch(domain:codav.itch.io)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }

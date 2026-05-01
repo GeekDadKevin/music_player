@@ -1,16 +1,20 @@
-from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtGui import QFont
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, QSettings, pyqtSlot
 from PyQt6.QtWidgets import (
     QHBoxLayout, QMainWindow,
-    QPushButton, QSplitter, QStackedWidget, QVBoxLayout, QWidget,
+    QSplitter, QStackedWidget, QVBoxLayout, QWidget,
 )
+
+_SETTINGS_FILE = Path.home() / ".music-player" / "window_state.ini"
 
 from src.music_player.logging import get_logger
 from src.music_player.ui.components.library_page import LibraryPage
 from src.music_player.ui.components.player_bar import PlayerBar
 from src.music_player.ui.components.playlist_page import PlaylistPage
 from src.music_player.ui.components.queue_panel import QueuePanel
-from src.music_player.ui.glyphs import MDL2_FONT, SETTINGS
+from src.music_player.ui.components.visualizer_panel import VisualizerPanel
+from src.music_player.ui.glyphs import MDL2_FONT
 from src.music_player.ui.sidebar_widget import SidebarWidget
 
 logger = get_logger(__name__)
@@ -34,25 +38,6 @@ class MusicPlayerWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         self.setCentralWidget(central)
-
-        # ── top bar — settings gear only ──────────────────────────────
-        top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(0, 6, 12, 6)
-        top_bar.addStretch()
-
-        gear_btn = QPushButton(SETTINGS)
-        gear_btn.setFont(QFont(MDL2_FONT, 14))
-        gear_btn.setFixedSize(36, 36)
-        gear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        gear_btn.setToolTip("Settings")
-        gear_btn.setStyleSheet(
-            "QPushButton{background:transparent;color:#666;border:none;"
-            "border-radius:18px;}"
-            "QPushButton:hover{color:#fff;background:#1e1e22;}"
-        )
-        gear_btn.clicked.connect(self._open_settings)
-        top_bar.addWidget(gear_btn)
-        root.addLayout(top_bar)
 
         # ── sidebar ──────────────────────────────────────────────────
         self._sidebar = SidebarWidget()
@@ -110,13 +95,47 @@ class MusicPlayerWindow(QMainWindow):
         self._splitter = splitter
         root.addWidget(splitter, stretch=1)
 
+        # ── visualizer panel (hidden by default) ─────────────────────
+        self._viz_panel = VisualizerPanel()
+        self._viz_panel.setVisible(False)
+        self._viz_panel.fullscreen_requested.connect(self._toggle_viz_fullscreen)
+        root.addWidget(self._viz_panel)
+
         # ── player bar ───────────────────────────────────────────────
         self._player_bar = PlayerBar()
         self._player_bar.setFixedHeight(80)
         self._player_bar.queue_toggled.connect(self._toggle_queue)
+        self._player_bar.visualizer_toggled.connect(self._toggle_visualizer)
         root.addWidget(self._player_bar)
 
+        self._root_layout  = root
+        self._viz_fullscreen = False
         self._stack.setCurrentIndex(_IDX_BROWSE)
+        self._restore_state()
+
+    # ── window state persistence ──────────────────────────────────────
+
+    def closeEvent(self, event) -> None:
+        self._save_state()
+        super().closeEvent(event)
+
+    def _save_state(self) -> None:
+        _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        s = QSettings(str(_SETTINGS_FILE), QSettings.Format.IniFormat)
+        s.setValue("window/geometry", self.saveGeometry())
+        s.setValue("window/splitter", self._splitter.sizes())
+
+    def _restore_state(self) -> None:
+        s = QSettings(str(_SETTINGS_FILE), QSettings.Format.IniFormat)
+        geom = s.value("window/geometry")
+        if geom:
+            self.restoreGeometry(geom)
+        sizes = s.value("window/splitter")
+        if sizes:
+            try:
+                self._splitter.setSizes([int(x) for x in sizes])
+            except (TypeError, ValueError):
+                pass
 
     # ── slot handlers ─────────────────────────────────────────────────
 
@@ -164,8 +183,45 @@ class MusicPlayerWindow(QMainWindow):
             sizes = self._splitter.sizes()
             self._splitter.setSizes([sizes[0], sizes[1] + sizes[2], 0])
 
-    def _open_settings(self) -> None:
-        from src.music_player.ui.components.settings_dialog import SettingsDialog
-        SettingsDialog(parent=self).exec()
+    def _toggle_visualizer(self) -> None:
+        if self._viz_fullscreen:
+            self._exit_viz_fullscreen()
+        else:
+            self._viz_panel.setVisible(not self._viz_panel.isVisible())
+
+    def _toggle_viz_fullscreen(self) -> None:
+        if self._viz_fullscreen:
+            self._exit_viz_fullscreen()
+        else:
+            self._enter_viz_fullscreen()
+
+    def _enter_viz_fullscreen(self) -> None:
+        if not self._viz_panel.isVisible():
+            self._viz_panel.setVisible(True)
+        self._splitter.hide()
+        self._player_bar.hide()
+        # Give the visualizer panel all the stretch so it fills the window.
+        self._root_layout.setStretch(self._root_layout.indexOf(self._splitter),  0)
+        self._root_layout.setStretch(self._root_layout.indexOf(self._viz_panel), 1)
+        self._root_layout.setStretch(self._root_layout.indexOf(self._player_bar), 0)
+        self._viz_panel.set_fullscreen_active(True)
+        self._viz_fullscreen = True
+        self.showFullScreen()
+
+    def _exit_viz_fullscreen(self) -> None:
+        self.showNormal()
+        self._splitter.show()
+        self._player_bar.show()
+        self._root_layout.setStretch(self._root_layout.indexOf(self._splitter),  1)
+        self._root_layout.setStretch(self._root_layout.indexOf(self._viz_panel), 0)
+        self._root_layout.setStretch(self._root_layout.indexOf(self._player_bar), 0)
+        self._viz_panel.set_fullscreen_active(False)
+        self._viz_fullscreen = False
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._viz_fullscreen:
+            self._exit_viz_fullscreen()
+        else:
+            super().keyPressEvent(event)
 
 

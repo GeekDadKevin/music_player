@@ -6,8 +6,8 @@ controller or domain layers imports it directly.
 
 Assumptions:
 - mpv (libmpv) is installed and findable on PATH.  On Windows the DLL is
-  expected in the project root directory (three levels above this file);
-  the PATH manipulation below handles that case.
+  expected in lib/mpv/ relative to the project root; the PATH manipulation
+  below handles that without requiring a system-wide install.
 - A QApplication (or QCoreApplication) is already running when an instance
   is created, because MpvAudioBackend is created inside PlaybackBridge which
   is itself created lazily after QApplication.exec() starts.
@@ -18,14 +18,16 @@ Assumptions:
 from __future__ import annotations
 
 import os
+import threading
 
 from src.music_player.logging import get_logger
 
-# Windows: mpv.dll must be on PATH before importing the binding
-_project_root = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..")
+# Windows: libmpv-2.dll lives in lib/mpv/ — prepend it to PATH before
+# importing the binding so ctypes finds it without a system install.
+_lib_dir = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib", "mpv")
 )
-os.environ["PATH"] = _project_root + os.pathsep + os.environ.get("PATH", "")
+os.environ["PATH"] = _lib_dir + os.pathsep + os.environ.get("PATH", "")
 
 import mpv  # noqa: E402
 
@@ -44,17 +46,35 @@ class MpvAudioBackend:
     """
 
     def __init__(self) -> None:
+        # Set before creating the player so the observer can reference it.
+        self._eof_event = threading.Event()
+
         self._player = mpv.MPV(
             ytdl=True,
             input_default_bindings=True,
             input_vo_keyboard=True,
         )
+
+        # idle-active becomes True when mpv has finished playing (track ended
+        # or stop() called) and False when mpv starts loading a new file.
+        # We set the event on True and clear it on False so that the brief
+        # idle-active=True transition that mpv emits when switching tracks
+        # (stopping old → loading new) does NOT leave the event permanently
+        # set and cause the queue to spuriously advance after the grace period.
+        @self._player.property_observer("idle-active")
+        def _on_idle(name: str, value: bool | None) -> None:
+            if value:
+                self._eof_event.set()
+            elif value is False:
+                self._eof_event.clear()
+
         logger.info("MpvAudioBackend initialised")
 
     # ── AudioPort implementation ──────────────────────────────────────
 
     def play(self, url: str) -> None:
         """Begin streaming url.  Stops any currently playing media first."""
+        self._eof_event.clear()
         self._player.play(url)
 
     def pause(self) -> None:
@@ -63,6 +83,7 @@ class MpvAudioBackend:
 
     def stop(self) -> None:
         """Stop playback and unload current media."""
+        self._eof_event.clear()
         self._player.stop()
 
     def set_volume(self, volume: int) -> None:
@@ -87,10 +108,7 @@ class MpvAudioBackend:
 
     @property
     def eof_reached(self) -> bool:
-        try:
-            return bool(self._player.eof_reached)
-        except Exception:
-            return False
+        return self._eof_event.is_set()
 
 
 # Backward-compatibility alias so any code that imported AudioPlayer still works.

@@ -348,6 +348,32 @@ class SubsonicMusicRepository:
             logger.warning(f"update_playlist failed: {exc}")
             return False
 
+    def get_lyrics_by_id(self, song_id: str) -> dict | None:
+        """Return structured lyrics from getLyricsBySongId (OpenSubsonic extension).
+
+        Returns the first structuredLyrics entry, or None if unavailable.
+        Synced entries include 'synced': True and 'line': [{'start': ms, 'value': str}].
+        """
+        try:
+            data = self._http.get("getLyricsBySongId.view", {"id": song_id})
+            items = data.get("lyricsList", {}).get("structuredLyrics", [])
+            if items:
+                # Prefer synced over unsynced
+                synced = [i for i in items if i.get("synced")]
+                return (synced or items)[0]
+        except Exception as exc:
+            logger.debug(f"getLyricsBySongId({song_id}) unavailable: {exc}")
+        return None
+
+    def get_lyrics(self, artist: str, title: str) -> str:
+        """Return plain-text lyrics string, or empty string on failure."""
+        try:
+            data = self._http.get("getLyrics.view", {"artist": artist, "title": title})
+            return data.get("lyrics", {}).get("value", "") or ""
+        except Exception as exc:
+            logger.warning(f"get_lyrics({title!r}) failed: {exc}")
+        return ""
+
     def ping(self) -> bool:
         """Return True if the server is reachable and credentials are valid."""
         try:

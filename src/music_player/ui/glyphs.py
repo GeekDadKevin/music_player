@@ -21,6 +21,8 @@ VOLUME       = "\uE767"
 MUTE         = "\uE74F"
 SETTINGS     = "\uE713"
 FULLSCREEN   = "\uE740"
+VISUALIZER   = "\uE9D9"  # audio equalizer bars (Segoe MDL2)
+POPOUT       = ""  # new/detached window (Segoe MDL2)
 
 # navigation
 BACK          = "\uE0D5"

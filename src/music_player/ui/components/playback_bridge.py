@@ -3,20 +3,14 @@
 Access via get_bridge() — never instantiate PlaybackBridge directly.
 All UI components that need playback state connect to this object's signals.
 
-Download-retry logic
---------------------
-Octofiesta downloads external songs on first stream access, so the initial
-request may return immediately with no data (fast EOF).  Two mechanisms
-handle this:
+EOF detection
+-------------
+The audio backend sets an internal threading.Event when mpv's idle-active
+property becomes True (i.e. playback has finished).  The bridge polls every
+500 ms and advances the queue when it sees the flag set and _eof_seen is False.
 
-  1. EOF grace period — we suppress any eof_reached signal for _EOF_GRACE_S
-     seconds after every play_track() call.  This prevents the poll timer
-     from mistaking the transient post-play eof_reached=True for a real end.
-
-  2. Download-retry loop — if eof_reached fires within _FAST_EOF_S seconds of
-     playback starting, we treat it as "download not ready yet" and reschedule
-     the same track after _RETRY_DELAY_S seconds, up to _MAX_RETRIES times.
-     A status_message signal keeps the UI informed.
+_eof_seen starts True so startup idle doesn't trigger an advance.
+play_track() resets it to False; stop() sets it back to True.
 """
 
 import time
@@ -29,11 +23,8 @@ from src.music_player.services import get_playback_controller
 
 logger = get_logger(__name__)
 
-_POLL_MS      = 500    # polling interval
-_EOF_GRACE_S  = 1.5    # suppress EOF for this long after every play_track()
-_FAST_EOF_S   = 2.0    # EOF within this many seconds → download not ready
-_RETRY_DELAY_S = 4     # wait this long before retrying a not-ready track
-_MAX_RETRIES  = 15     # give up after ~60 s of waiting
+_POLL_MS     = 500   # polling interval
+_EOF_GRACE_S = 1.5   # suppress EOF for this long after every play_track()
 
 
 class PlaybackBridge(QObject):
@@ -49,14 +40,9 @@ class PlaybackBridge(QObject):
         super().__init__()
         self._controller = get_playback_controller()
 
-        # EOF state
-        self._eof_seen         = False
+        # EOF state — start True so the startup idle-active doesn't advance queue
+        self._eof_seen         = True
         self._eof_ignore_until = 0.0
-        self._play_start_time  = 0.0
-
-        # Retry state
-        self._retry_track: dict | None = None
-        self._retry_count = 0
 
         # Play-count tracking
         self._current_track:   dict | None = None
@@ -80,12 +66,9 @@ class PlaybackBridge(QObject):
     # ── playback API ──────────────────────────────────────────────────
 
     def play_track(self, track: dict) -> None:
-        """Start streaming a track immediately, resetting all retry state."""
+        """Start streaming a track immediately."""
         self._eof_seen         = False
         self._eof_ignore_until = time.monotonic() + _EOF_GRACE_S
-        self._play_start_time  = time.monotonic()
-        self._retry_track      = None
-        self._retry_count      = 0
         self.status_message.emit("")
 
         self._current_track = track
@@ -120,8 +103,7 @@ class PlaybackBridge(QObject):
                 self.play_track(prev)
 
     def stop(self) -> None:
-        self._retry_track = None
-        self._retry_count = 0
+        self._eof_seen = True   # prevent idle-active from triggering queue advance
         self.status_message.emit("")
         self._controller.stop()
         self.playback_state_changed.emit(False)
@@ -218,56 +200,13 @@ class PlaybackBridge(QObject):
     # ── internal ──────────────────────────────────────────────────────
 
     def _on_track_ended(self) -> None:
-        elapsed = time.monotonic() - self._play_start_time
-
-        if elapsed < _FAST_EOF_S:
-            # Download not ready — schedule a retry for the same track
-            current = get_queue().current()
-            if current and self._retry_count < _MAX_RETRIES:
-                self._retry_count += 1
-                self._retry_track = current
-                msg = f"Downloading… ({self._retry_count}/{_MAX_RETRIES})"
-                self.status_message.emit(msg)
-                logger.info(
-                    f"Stream not ready for {current.get('title')!r} "
-                    f"— retry {self._retry_count}/{_MAX_RETRIES} "
-                    f"in {_RETRY_DELAY_S}s"
-                )
-                QTimer.singleShot(int(_RETRY_DELAY_S * 1000), self._retry_play)
-                return
-
-            # Retries exhausted — give up and advance
-            logger.warning(
-                f"Giving up on {(self._retry_track or {}).get('title')!r} "
-                f"after {_MAX_RETRIES} retries"
-            )
-
-        # Normal track end (or gave up) — advance queue
+        logger.info("Track ended — advancing queue")
         self.status_message.emit("")
-        self._retry_track = None
-        self._retry_count = 0
-
         nxt = get_queue().advance()
         if nxt:
             self.play_track(nxt)
         else:
             self.playback_state_changed.emit(False)
-
-    def _retry_play(self) -> None:
-        track = self._retry_track
-        if not track:
-            return
-
-        # Reset EOF gate so the retry attempt gets a clean slate
-        self._eof_seen         = False
-        self._eof_ignore_until = time.monotonic() + _EOF_GRACE_S
-        self._play_start_time  = time.monotonic()
-
-        try:
-            self._controller.play_track(track["id"])
-            logger.debug(f"Retry play: {track.get('title')!r}")
-        except Exception as exc:
-            logger.warning(f"Retry play_track failed: {exc}")
 
 
 # ── singleton ─────────────────────────────────────────────────────────

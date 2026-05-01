@@ -282,7 +282,10 @@ class TrackTable(QTableWidget):
             return
 
         # Default: play_now — replace queue and start playing
-        playable = [t for i, t in enumerate(self._tracks) if i not in self._unmatched and t]
+        playable = [
+            t for i, t in enumerate(self._tracks)
+            if i not in self._unmatched and t and not t.get("_missing")
+        ]
         idx = playable.index(track) if track in playable else 0
         get_queue().set_queue(playable, start=idx)
         get_bridge().play_track(track)
@@ -345,7 +348,10 @@ class TrackTable(QTableWidget):
         action  = menu.exec(self.mapToGlobal(pos))
 
         if action == play_now:
-            playable = [t for i, t in enumerate(self._tracks) if i not in self._unmatched and t]
+            playable = [
+                t for i, t in enumerate(self._tracks)
+                if i not in self._unmatched and t and not t.get("_missing")
+            ]
             idx = playable.index(track) if track in playable else 0
             get_queue().set_queue(playable, start=idx)
             get_bridge().play_track(track)

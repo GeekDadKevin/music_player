@@ -10,6 +10,9 @@ dependencies = [
 	"httpx>=0.27.0",
 	"python-mpv>=1.0.5",
 	"requests>=2.33.1",
+	"numpy>=1.26.0",
+	"sounddevice>=0.4.7",
+	"python-dotenv>=1.2.2",
 ]
 [tool.ruff]
 line-length = 120
