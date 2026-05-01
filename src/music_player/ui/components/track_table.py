@@ -114,6 +114,9 @@ class TrackTable(QTableWidget):
         self.viewport().setMouseTracking(True)
         self.viewport().mouseMoveEvent = self._on_mouse_move
 
+        from src.music_player.ui.app_settings import settings_signals
+        settings_signals().changed.connect(self._on_settings_changed)
+
     # ── sizing modes ──────────────────────────────────────────────────
 
     def embed_in_scroll_area(self) -> None:
@@ -155,14 +158,18 @@ class TrackTable(QTableWidget):
         for row in range(self.rowCount()):
             if row in self._unmatched:
                 continue
-            playing = self._tracks[row].get("id") == track_id
-            for col in range(self.columnCount()):
-                item = self.item(row, col)
-                if item:
-                    f = item.font()
-                    f.setBold(playing)
-                    item.setFont(f)
-                    item.setForeground(QColor("#1db954") if playing else QColor("#ccc"))
+            playing = row < len(self._tracks) and self._tracks[row].get("id") == track_id
+            if playing:
+                for col in range(self.columnCount()):
+                    item = self.item(row, col)
+                    if item:
+                        f = item.font()
+                        f.setBold(True)
+                        item.setFont(f)
+                        item.setForeground(QColor("#1db954"))
+            else:
+                # _style_row handles _missing (dark grey), unmatched, and normal rows
+                self._style_row(row)
 
     # ── Qt overrides ──────────────────────────────────────────────────
 
@@ -218,12 +225,21 @@ class TrackTable(QTableWidget):
 
         self.resizeRowsToContents()
 
+    def _on_settings_changed(self) -> None:
+        for row in range(self.rowCount()):
+            self._style_row(row)
+
     def _style_row(self, row: int) -> None:
+        from src.music_player.ui.app_settings import load_settings
+        s = load_settings()
         if row in self._unmatched:
             f, colour = QFont(), QColor("#444")
             f.setStrikeOut(True)
         elif row < len(self._tracks) and self._tracks[row].get("_missing"):
-            f, colour = QFont(), QColor("#3a3a3a")
+            f, colour = QFont(), QColor(s.missing_track_color)
+        elif (row < len(self._tracks) and
+              self._tracks[row].get("id", "").startswith("ext-")):
+            f, colour = QFont(), QColor(s.ext_track_color)
         else:
             f, colour = QFont(), QColor("#ccc")
         for col in range(self.columnCount()):
@@ -312,7 +328,15 @@ class TrackTable(QTableWidget):
             return
 
         if row < len(self._tracks) and self._tracks[row].get("_missing"):
-            return   # no context menu for missing tracks — double-click to play
+            t        = self._tracks[row]
+            auto_act = menu.addAction(f"{SEARCH}  Auto-search")
+            find_act = menu.addAction(f"{SEARCH}  Search manually…")
+            chosen   = menu.exec(self.mapToGlobal(pos))
+            if chosen == auto_act:
+                self._play_missing(t)
+            elif chosen == find_act:
+                self._open_resolve_dialog(t)
+            return
 
         track    = self._tracks[row]
         play_now  = menu.addAction(f"{PLAY}  Play Now")
@@ -411,14 +435,22 @@ class TrackTable(QTableWidget):
         else:
             self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
 
+    def _open_resolve_dialog(self, track: dict) -> None:
+        """Open the search dialog pre-filled with the missing track's title+artist."""
+        from src.music_player.ui.components.search_dialog import SearchResultsDialog
+        query = f"{track.get('title', '')} {track.get('artist', '')}".strip()
+        dlg   = SearchResultsDialog(initial_query=query, tracks_only=True, parent=self)
+        dlg.setWindowTitle(f"Find: {track.get('title', '?')}")
+        dlg.exec()
+
     def _play_missing(self, track: dict) -> None:
-        """Search Subsonic for a missing track and play it via the bridge."""
+        """Try one auto-search for a missing track; prompt manual search on failure."""
         from src.music_player.ui.workers.download_worker import SearchAndPlayWorker
+        from src.music_player.ui.workers.image_loader import _launch
 
         def _on_found(match: dict) -> None:
-            # Build a queue that swaps the missing entry for the resolved one,
-            # keeping all other library tracks in order.
-            playable = []
+            get_bridge().status_message.emit("")
+            playable  = []
             start_idx = 0
             for i, t in enumerate(self._tracks):
                 if t.get("_missing"):
@@ -431,7 +463,15 @@ class TrackTable(QTableWidget):
             get_bridge().play_track(match)
             self.highlight_track_id(match["id"])
 
-        from src.music_player.ui.workers.image_loader import _launch
+        def _on_not_found() -> None:
+            get_bridge().status_message.emit(
+                "Not found — right-click to search manually"
+            )
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(4000, lambda: get_bridge().status_message.emit(""))
+
+        get_bridge().status_message.emit("Searching…")
         worker = SearchAndPlayWorker(track.get("title", ""), track.get("artist", ""))
         worker.found.connect(_on_found)
+        worker.not_found.connect(_on_not_found)
         _launch(worker)

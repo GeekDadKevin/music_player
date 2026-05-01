@@ -72,25 +72,61 @@ class SettingsDialog(QDialog):
         panel = _panel()
         layout = panel.layout()
 
-        row = QHBoxLayout()
-        row.addWidget(_label("Highlight / accent colour"))
-        row.addStretch()
+        self._highlight_color     = self._s.highlight_color
+        self._ext_track_color     = self._s.ext_track_color
+        self._missing_track_color = self._s.missing_track_color
 
-        self._color_swatch = QPushButton()
-        self._color_swatch.setFixedSize(32, 32)
-        self._color_swatch.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._color_swatch.setToolTip("Click to pick colour")
-        self._color_swatch.clicked.connect(self._pick_color)
-        self._apply_swatch(self._s.highlight_color)
-        row.addWidget(self._color_swatch)
-
-        self._color_label = QLabel(self._s.highlight_color)
-        self._color_label.setStyleSheet("color:#888; font-size:12px; background:transparent;")
-        row.addWidget(self._color_label)
-
-        layout.addLayout(row)
-        layout.addWidget(_hint("Used for the progress bar, active tabs, and shuffle button."))
+        layout.addLayout(self._color_row(
+            "Highlight / accent colour", self._highlight_color,
+            lambda c: setattr(self, "_highlight_color", c),
+            "Progress bar, active tabs, and shuffle button.",
+        ))
+        layout.addWidget(_separator())
+        layout.addLayout(self._color_row(
+            "Downloading / external track", self._ext_track_color,
+            lambda c: setattr(self, "_ext_track_color", c),
+            "Track exists in catalog (ext-deezer) but hasn't been downloaded locally yet.",
+        ))
+        layout.addWidget(_separator())
+        layout.addLayout(self._color_row(
+            "Unavailable / unresolved track", self._missing_track_color,
+            lambda c: setattr(self, "_missing_track_color", c),
+            "Track listed in MusicBrainz data but not found anywhere in your library.",
+        ))
         return panel
+
+    def _color_row(self, label: str, initial: str, on_change,
+                   hint_text: str = "") -> QVBoxLayout:
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        row = QHBoxLayout()
+        row.addWidget(_label(label))
+        row.addStretch()
+        swatch = QPushButton()
+        swatch.setFixedSize(32, 32)
+        swatch.setCursor(Qt.CursorShape.PointingHandCursor)
+        swatch.setToolTip("Click to pick colour")
+        self._apply_swatch(swatch, initial)
+        value_lbl = QLabel(initial)
+        value_lbl.setStyleSheet("color:#888; font-size:12px; background:transparent;")
+        current = [initial]
+
+        def _pick(s=swatch, lbl=value_lbl, cur=current):
+            color = QColorDialog.getColor(QColor(cur[0]), self, label)
+            if color.isValid():
+                hex_color = color.name()
+                cur[0] = hex_color
+                self._apply_swatch(s, hex_color)
+                lbl.setText(hex_color)
+                on_change(hex_color)
+
+        swatch.clicked.connect(_pick)
+        row.addWidget(swatch)
+        row.addWidget(value_lbl)
+        col.addLayout(row)
+        if hint_text:
+            col.addWidget(_hint(hint_text))
+        return col
 
     def _playback_panel(self) -> QWidget:
         panel = _panel()
@@ -176,31 +212,19 @@ class SettingsDialog(QDialog):
 
     # ── actions ───────────────────────────────────────────────────────
 
-    def _pick_color(self) -> None:
-        initial = QColor(self._s.highlight_color)
-        color = QColorDialog.getColor(initial, self, "Pick accent colour")
-        if color.isValid():
-            hex_color = color.name()
-            self._s = AppSettings(
-                highlight_color     = hex_color,
-                min_play_seconds    = self._s.min_play_seconds,
-                scrobble_enabled    = self._s.scrobble_enabled,
-                double_click_action = self._s.double_click_action,
-            )
-            self._apply_swatch(hex_color)
-            self._color_label.setText(hex_color)
-
-    def _apply_swatch(self, color: str) -> None:
-        self._color_swatch.setStyleSheet(
+    def _apply_swatch(self, btn: QPushButton, color: str) -> None:
+        btn.setStyleSheet(
             f"QPushButton{{background:{color};border:none;border-radius:4px;}}"
         )
 
     def _on_ok(self) -> None:
         updated = AppSettings(
-            highlight_color     = self._s.highlight_color,
+            highlight_color     = self._highlight_color,
             min_play_seconds    = self._spin.value(),
             scrobble_enabled    = self._scrobble_chk.isChecked(),
             double_click_action = self._dbl_click.currentData(),
+            ext_track_color     = self._ext_track_color,
+            missing_track_color = self._missing_track_color,
         )
         save_settings(updated)
         self.accept()
@@ -235,6 +259,13 @@ def _label(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet("color:#ddd; font-size:13px; background:transparent;")
     return lbl
+
+
+def _separator() -> QWidget:
+    w = QWidget()
+    w.setFixedHeight(1)
+    w.setStyleSheet("background:#1e1e22; margin:2px 0;")
+    return w
 
 
 def _hint(text: str) -> QLabel:

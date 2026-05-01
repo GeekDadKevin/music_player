@@ -375,28 +375,29 @@ class SubsonicMusicRepository:
         return ""
 
     def scrobble(self, song_id: str) -> None:
-        """Submit a completed play to the server (updates server play counts)."""
+        """Submit a completed play to the server (updates server play counts).
+
+        Raises on failure so callers can retry (e.g. for ext-deezer-* songs
+        that are still being downloaded when the scrobble is first attempted).
+        """
         import time
-        try:
-            self._http.get("scrobble.view", {
-                "id":         song_id,
-                "time":       int(time.time() * 1000),
-                "submission": "true",
-            }, timeout=10.0)
-            logger.debug(f"scrobble: submitted {song_id}")
-        except Exception as exc:
-            logger.warning(f"scrobble({song_id}) failed: {exc}")
+        self._http.get("scrobble.view", {
+            "id":         song_id,
+            "time":       int(time.time() * 1000),
+            "submission": "true",
+        }, timeout=10.0)
+        logger.debug(f"scrobble: submitted {song_id}")
 
     def update_now_playing(self, song_id: str) -> None:
-        """Notify the server that this song is now playing (no play-count change)."""
-        try:
-            self._http.get("scrobble.view", {
-                "id":         song_id,
-                "submission": "false",
-            }, timeout=10.0)
-            logger.debug(f"scrobble: now-playing {song_id}")
-        except Exception as exc:
-            logger.warning(f"update_now_playing({song_id}) failed: {exc}")
+        """Notify the server that this song is now playing (no play-count change).
+
+        Raises on failure so callers can retry.
+        """
+        self._http.get("scrobble.view", {
+            "id":         song_id,
+            "submission": "false",
+        }, timeout=10.0)
+        logger.debug(f"scrobble: now-playing {song_id}")
 
     def ping(self) -> bool:
         """Return True if the server is reachable and credentials are valid."""

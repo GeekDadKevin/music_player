@@ -148,19 +148,41 @@ class PlaybackBridge(QObject):
             record_play(self._current_track, int(time_pos))
             self._server_scrobble(self._current_track["id"], submission=True)
 
-    def _server_scrobble(self, song_id: str, submission: bool) -> None:
-        """Fire-and-forget server scrobble; never blocks the UI thread."""
+    def _server_scrobble(self, song_id: str, submission: bool, attempt: int = 0) -> None:
+        """Fire-and-forget server scrobble; retries if the track isn't local yet.
+
+        Navidrome returns error code 70 for ext-deezer-* songs that are still
+        being downloaded by Octofiesta.  We sleep and retry in the same daemon
+        thread until the track becomes available or we exhaust attempts.
+        """
         import threading
         from src.music_player.ui.app_settings import load_settings
         if not load_settings().scrobble_enabled:
             return
+
+        _MAX_RETRIES = 18   # ~4.5 minutes at 15 s intervals
+        _RETRY_SECS  = 15
+
         from src.music_player.services import get_repository
         def _do() -> None:
-            repo = get_repository()
-            if submission:
-                repo.scrobble(song_id)
-            else:
-                repo.update_now_playing(song_id)
+            import time as _time
+            try:
+                repo = get_repository()
+                if submission:
+                    repo.scrobble(song_id)
+                else:
+                    repo.update_now_playing(song_id)
+            except Exception as exc:
+                if "not available locally" in str(exc) and attempt < _MAX_RETRIES:
+                    logger.debug(
+                        f"scrobble: {song_id} not local yet — "
+                        f"retry {attempt + 1}/{_MAX_RETRIES} in {_RETRY_SECS}s"
+                    )
+                    _time.sleep(_RETRY_SECS)
+                    self._server_scrobble(song_id, submission, attempt + 1)
+                else:
+                    logger.warning(f"scrobble({'submission' if submission else 'now-playing'}) "
+                                   f"failed for {song_id}: {exc}")
         threading.Thread(target=_do, daemon=True).start()
 
     # ── starred / heart ───────────────────────────────────────────────

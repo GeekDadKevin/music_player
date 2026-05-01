@@ -62,7 +62,7 @@ class LoadTopTracksWorker(QThread):
             if not mbid:
                 self.error.emit("Artist not found on MusicBrainz")
                 return
-            tracks = self._get_top_tracks(mbid)
+            tracks = self._get_top_tracks(mbid, self._artist_name)
             self.tracks_loaded.emit(tracks)
         except Exception as exc:
             logger.error(f"LoadTopTracksWorker error: {exc}")
@@ -71,15 +71,20 @@ class LoadTopTracksWorker(QThread):
     def _get_mbid(self, name: str) -> str | None:
         resp = requests.get(
             "https://musicbrainz.org/ws/2/artist/",
-            params={"query": f"artist:{name}", "fmt": "json", "limit": 1},
+            params={"query": f"artist:{name}", "fmt": "json", "limit": 5},
             headers=_MB_HEADERS,
             timeout=8,
         )
         resp.raise_for_status()
         artists = resp.json().get("artists", [])
+        # Prefer an exact case-insensitive name match over the ranked first result
+        name_lower = name.lower()
+        for a in artists:
+            if a.get("name", "").lower() == name_lower:
+                return a["id"]
         return artists[0]["id"] if artists else None
 
-    def _get_top_tracks(self, mbid: str) -> list[dict]:
+    def _get_top_tracks(self, mbid: str, artist_name: str) -> list[dict]:
         resp = requests.get(
             f"https://api.listenbrainz.org/1/popularity/top-recordings-for-artist/{mbid}",
             headers=_MB_HEADERS,
@@ -88,12 +93,22 @@ class LoadTopTracksWorker(QThread):
         resp.raise_for_status()
         data = resp.json()
         payload = data if isinstance(data, list) else data.get("payload", [])
+        # ListenBrainz returns every recording where this MBID appears in the
+        # artist credits, including features on other artists' songs.  Filter to
+        # recordings where the credited artist name starts with our artist so we
+        # don't show "Other Artist feat. ZZ Ward" in ZZ Ward's top tracks.
+        name_lower = artist_name.lower()
         tracks = []
-        for item in payload[:10]:
+        for item in payload:
+            credited = item.get("artist_name", "").lower()
+            if not credited.startswith(name_lower):
+                continue
             tracks.append({
                 "name": item.get("recording_name", "Unknown"),
                 "listen_count": item.get("total_listen_count", 0),
             })
+            if len(tracks) == 10:
+                break
         return tracks
 
 
@@ -113,12 +128,27 @@ class ResolveTopTracksWorker(QThread):
 
     def run(self) -> None:
         try:
+            import re
+            from difflib import SequenceMatcher
             from src.music_player.ui.workers.playlist_import import find_match
             client = SubsonicClient()
 
+            def _primary(a: str) -> str:
+                return re.split(r'\s+(?:ft\.?|feat\.?|featuring|with)\s+', a,
+                                maxsplit=1, flags=re.IGNORECASE)[0].strip().lower()
+
+            target_artist = _primary(self._artist)
+
             def _resolve(t: dict) -> dict:
                 match = find_match(client, t["title"], self._artist)
-                return match if match else t
+                if not match:
+                    return t
+                # Reject if the matched track's primary artist doesn't resemble
+                # the target — strips "ft. X" before comparing so "ZZ Ward ft. Y"
+                # correctly matches a search for "ZZ Ward".
+                if SequenceMatcher(None, _primary(match.get("artist", "")), target_artist).ratio() < 0.6:
+                    return t
+                return match
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                 results = list(pool.map(_resolve, self._tracks))

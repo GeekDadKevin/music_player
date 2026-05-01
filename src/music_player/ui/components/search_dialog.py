@@ -91,13 +91,15 @@ class _ResultRow(QWidget):
 
 
 class SearchResultsDialog(QDialog):
-    def __init__(self, initial_query: str = "", parent=None) -> None:
+    def __init__(self, initial_query: str = "", tracks_only: bool = False,
+                 parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Search Library")
         self.setMinimumSize(540, 460)
         self.setMaximumHeight(760)
         self.setStyleSheet(f"background:{_BG}; color:#ddd;")
         self._worker = None
+        self._tracks_only = tracks_only
         self._build_ui()
         if initial_query:
             self._search_box.setText(initial_query)
@@ -180,17 +182,24 @@ class SearchResultsDialog(QDialog):
         albums  = results.get("albums",  [])
         tracks  = results.get("tracks",  [])
 
+        if self._tracks_only:
+            artists = []
+            albums  = []
+
         if not (artists or albums or tracks):
             self._status.setText("No results.")
             self._results_layout.addStretch()
             return
 
         n_a, n_al, n_t = len(artists), len(albums), len(tracks)
-        self._status.setText(
-            f"{n_a} artist{'s' if n_a != 1 else ''}  ·  "
-            f"{n_al} album{'s' if n_al != 1 else ''}  ·  "
-            f"{n_t} track{'s' if n_t != 1 else ''}"
-        )
+        if self._tracks_only:
+            self._status.setText(f"{n_t} track{'s' if n_t != 1 else ''}")
+        else:
+            self._status.setText(
+                f"{n_a} artist{'s' if n_a != 1 else ''}  ·  "
+                f"{n_al} album{'s' if n_al != 1 else ''}  ·  "
+                f"{n_t} track{'s' if n_t != 1 else ''}"
+            )
 
         # ── Artists ──────────────────────────────────────────────────
         if artists:

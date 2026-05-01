@@ -24,6 +24,8 @@ _DEFAULTS = {
     "min_play_seconds":    30,
     "scrobble_enabled":    True,
     "double_click_action": "play_now",
+    "ext_track_color":     "#585858",
+    "missing_track_color": "#c0392b",
 }
 
 
@@ -33,6 +35,8 @@ class AppSettings:
     min_play_seconds:    int  = 30          # seconds before a play is recorded
     scrobble_enabled:    bool = True        # whether to scrobble plays to the server
     double_click_action: str  = "play_now"  # "play_now" | "play_now_keep" | "add_to_queue" | "play_next"
+    ext_track_color:     str  = "#585858"   # ext-deezer / in catalog but not yet downloaded
+    missing_track_color: str  = "#c0392b"   # not found anywhere in library or Deezer
 
 
 # ── persistence ───────────────────────────────────────────────────────
@@ -53,6 +57,8 @@ def load_settings() -> AppSettings:
                 min_play_seconds    = int(merged["min_play_seconds"]),
                 scrobble_enabled    = bool(merged["scrobble_enabled"]),
                 double_click_action = str(merged.get("double_click_action", "play_now")),
+                ext_track_color     = str(merged.get("ext_track_color",     "#585858")),
+                missing_track_color = str(merged.get("missing_track_color", "#c0392b")),
             )
         else:
             _cache = AppSettings()

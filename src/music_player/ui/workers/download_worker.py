@@ -1,9 +1,16 @@
-"""SearchAndPlayWorker — find a track in Subsonic so Octofiesta can download it.
+"""SearchAndPlayWorker — resolve a missing track so Octofiesta can download it.
 
-Playing the stream URL is enough to trigger an Octofiesta download; no explicit
-HEAD request is needed.  This worker just resolves the Subsonic ID for a track
-that is shown in the UI but not yet in the local library.
+Resolution order:
+  1. Subsonic search (find_match) — returns a match only when the primary
+     artist is similar enough to the target (avoids wrong-artist false positives).
+  2. Deezer public API fallback — if Subsonic has no usable match, we look up
+     the Deezer track ID and construct the ext-deezer-song-{id} reference that
+     Navidrome exposes.  Playing that stream URL triggers the Octofiesta download
+     even when Navidrome's ext-deezer metadata is wrong or missing.
 """
+
+import re
+from difflib import SequenceMatcher
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -12,15 +19,29 @@ from src.music_player.repository.subsonic_client import SubsonicClient
 
 logger = get_logger(__name__)
 
+_FT_RE = re.compile(r'\s+(?:ft\.?|feat\.?|featuring|with)\s+.*', re.IGNORECASE)
+
+
+def _primary_artist(name: str) -> str:
+    """Strip feature credits and return the primary artist name, lower-cased."""
+    return _FT_RE.sub("", name).strip().lower()
+
+
+def _artist_ok(matched: str, target: str) -> bool:
+    if not target or not matched:
+        return True
+    return SequenceMatcher(None, _primary_artist(matched), _primary_artist(target)).ratio() >= 0.6
+
 
 class SearchAndPlayWorker(QThread):
-    """Search Subsonic for a track by title/artist and emit the matched dict.
+    """Resolve a missing track to a playable dict and emit ``found``.
 
-    The caller should connect ``found`` and call play_track on the bridge.
-    If no match is found the signal is not emitted and nothing happens.
+    ``not_found`` is emitted when both Subsonic and Deezer searches come up
+    empty, so the caller can retry later (e.g. while Octofiesta is downloading).
     """
 
-    found = pyqtSignal(dict)
+    found     = pyqtSignal(dict)
+    not_found = pyqtSignal()
 
     def __init__(self, title: str, artist: str, parent=None) -> None:
         super().__init__(parent)
@@ -32,10 +53,54 @@ class SearchAndPlayWorker(QThread):
             from src.music_player.ui.workers.playlist_import import find_match
             client = SubsonicClient()
             match  = find_match(client, self._title, self._artist)
-            if match:
-                logger.info(f"Resolved missing track {self._title!r} → id={match['id']}")
+            if match and _artist_ok(match.get("artist", ""), self._artist):
+                logger.info(f"Resolved via Subsonic: {self._title!r} → id={match['id']}")
                 self.found.emit(match)
+                return
+
+            # Subsonic had no match or returned a wrong-artist song.
+            # Try Deezer to get the canonical ext-deezer-song-{id} reference.
+            deezer = self._deezer_lookup()
+            if deezer:
+                logger.info(f"Resolved via Deezer: {self._title!r} → id={deezer['id']}")
+                self.found.emit(deezer)
             else:
-                logger.info(f"Missing track not found in library: {self._title!r}")
+                logger.info(f"Missing track not yet available: {self._title!r}")
+                self.not_found.emit()
         except Exception as exc:
             logger.error(f"SearchAndPlayWorker error: {exc}")
+            self.not_found.emit()
+
+    def _deezer_lookup(self) -> dict | None:
+        """Search Deezer's public API and return a synthetic ext-deezer dict."""
+        try:
+            import requests
+            resp = requests.get(
+                "https://api.deezer.com/search",
+                params={"q": f"{self._title} {self._artist}", "limit": 10},
+                timeout=8,
+            )
+            resp.raise_for_status()
+            target_title  = self._title.lower().strip()
+            target_artist = _primary_artist(self._artist)
+            for item in resp.json().get("data", []):
+                t_sim = SequenceMatcher(
+                    None, item.get("title", "").lower(), target_title
+                ).ratio()
+                a_sim = SequenceMatcher(
+                    None,
+                    _primary_artist(item.get("artist", {}).get("name", "")),
+                    target_artist,
+                ).ratio()
+                if t_sim >= 0.85 and a_sim >= 0.7:
+                    return {
+                        "id":       f"ext-deezer-song-{item['id']}",
+                        "title":    item.get("title", self._title),
+                        "artist":   item.get("artist", {}).get("name", self._artist),
+                        "album":    item.get("album", {}).get("title", ""),
+                        "duration": item.get("duration", 0),
+                        "coverArt": f"ext-deezer-song-{item['id']}",
+                    }
+        except Exception as exc:
+            logger.debug(f"Deezer lookup failed for {self._title!r}: {exc}")
+        return None
