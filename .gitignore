@@ -3,6 +3,7 @@ logs/
 .venv/
 .env
 *.lock
+*.db
 # Native binaries — stored in lib/ but not committed
 lib/
 dist/

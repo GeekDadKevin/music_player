@@ -11,17 +11,16 @@ threshold was crossed.
 """
 
 import sqlite3
-from pathlib import Path
 
+from src.music_player._paths import db_dir
 from src.music_player.logging import get_logger
 
 logger = get_logger(__name__)
 
-_DB = Path.home() / ".music-player" / "plays.db"
+_DB = db_dir() / "plays.db"
 
 
 def _connect() -> sqlite3.Connection:
-    _DB.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(_DB)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""

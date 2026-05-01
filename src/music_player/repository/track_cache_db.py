@@ -10,17 +10,16 @@ Values are JSON-encoded Python objects (list or dict).
 
 import json
 import sqlite3
-from pathlib import Path
 
+from src.music_player._paths import db_dir
 from src.music_player.logging import get_logger
 
 logger = get_logger(__name__)
 
-_DB = Path.home() / ".music-player" / "track_cache.db"
+_DB = db_dir() / "track_cache.db"
 
 
 def _connect() -> sqlite3.Connection:
-    _DB.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(_DB)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(

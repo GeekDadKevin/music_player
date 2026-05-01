@@ -15,17 +15,16 @@ the track has no match.  Storing the full dict avoids a network call on load.
 
 import json
 import sqlite3
-from pathlib import Path
 
+from src.music_player._paths import db_dir
 from src.music_player.logging import get_logger
 
 logger = get_logger(__name__)
 
-_DB_PATH = Path.home() / ".music-player" / "playlists.db"
+_DB_PATH = db_dir() / "playlists.db"
 
 
 def _connect() -> sqlite3.Connection:
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(_DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

@@ -28,3 +28,15 @@ def app_root() -> Path:
         return Path(meipass) if meipass else Path(sys.executable).parent
     # src/music_player/_paths.py → src/music_player/ → src/ → project root
     return Path(__file__).parents[2]
+
+
+def data_dir() -> Path:
+    """User data directory: ~/.music-player/"""
+    return Path.home() / ".music-player"
+
+
+def db_dir() -> Path:
+    """SQLite database directory: ~/.music-player/db/"""
+    d = data_dir() / "db"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

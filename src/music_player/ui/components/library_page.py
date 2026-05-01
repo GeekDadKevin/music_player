@@ -912,8 +912,8 @@ class _ArtistCard(QWidget):
 def _artist_play_count(name: str) -> int:
     try:
         import sqlite3
-        from pathlib import Path
-        db = Path.home() / ".music-player" / "plays.db"
+        from src.music_player._paths import db_dir
+        db = db_dir() / "plays.db"
         if not db.exists():
             return 0
         conn = sqlite3.connect(db)
@@ -1565,6 +1565,10 @@ def _ensure_browse_visible(library_page) -> None:
 def _set_circle_image(label: QLabel, data: bytes, size: int) -> None:
     """Decode raw bytes and apply a circular clip to a QLabel."""
     if not data:
+        return
+    try:
+        label.objectName()  # raises RuntimeError if C++ object was deleted
+    except RuntimeError:
         return
     from PyQt6.QtGui import QPainter, QPainterPath, QPixmap
     px = QPixmap()

@@ -1,11 +1,11 @@
 import sqlite3
-from pathlib import Path
 
+from src.music_player._paths import db_dir
 from src.music_player.logging import get_logger
 
 logger = get_logger(__name__)
 
-_DB_PATH = Path.home() / ".music-player" / "image_cache.db"
+_DB_PATH = db_dir() / "image_cache.db"
 
 
 def _connect() -> sqlite3.Connection:

@@ -8,13 +8,13 @@ Images are fetched on demand when a card is shown, not at startup.
 """
 
 import sqlite3
-from pathlib import Path
 
+from src.music_player._paths import db_dir
 from src.music_player.logging import get_logger
 
 logger = get_logger(__name__)
 
-_DB_PATH = Path.home() / ".music-player" / "image_cache.db"
+_DB_PATH = db_dir() / "image_cache.db"
 
 _images:    dict[str, bytes] = {}
 _artists:   list[dict] = []
@@ -27,7 +27,6 @@ def preload() -> int:
     """Load every row from SQLite into memory.  Returns count loaded."""
     global _images
     try:
-        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(_DB_PATH)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
@@ -56,7 +55,6 @@ def has(key: str) -> bool:
 def put(key: str, data: bytes, source: str) -> None:
     _images[key] = data
     try:
-        _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(_DB_PATH)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
