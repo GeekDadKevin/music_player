@@ -40,8 +40,9 @@ class SearchAndPlayWorker(QThread):
     empty, so the caller can retry later (e.g. while Octofiesta is downloading).
     """
 
-    found     = pyqtSignal(dict)
-    not_found = pyqtSignal()
+    found       = pyqtSignal(dict)
+    not_found   = pyqtSignal()   # nothing found anywhere — give up
+    downloading = pyqtSignal()   # ext-deezer found, download triggered — retry
 
     def __init__(self, title: str, artist: str, parent=None) -> None:
         super().__init__(parent)
@@ -55,16 +56,15 @@ class SearchAndPlayWorker(QThread):
             match  = find_match(client, self._title, self._artist)
             if match and _artist_ok(match.get("artist", ""), self._artist):
                 if match.get("id", "").startswith("ext-"):
-                    # Track is in the Navidrome catalog but not downloaded yet.
-                    # Trigger the download via a HEAD request, then signal not_found
-                    # so the caller retries — once Navidrome indexes the local file
-                    # find_match will return a non-ext ID and we can actually play it.
+                    # Track is in the catalog but not yet downloaded locally.
+                    # Trigger the download and let the caller retry until the
+                    # local file is indexed by Navidrome.
                     self._trigger_download(client, match["id"])
                     logger.info(
                         f"Triggered download for ext track {self._title!r} "
-                        f"({match['id']}) — will retry"
+                        f"({match['id']}) — retrying until local"
                     )
-                    self.not_found.emit()
+                    self.downloading.emit()
                     return
                 logger.info(f"Resolved via Subsonic: {self._title!r} → id={match['id']}")
                 self.found.emit(match)
@@ -74,14 +74,12 @@ class SearchAndPlayWorker(QThread):
             # Try Deezer to get the canonical ext-deezer-song-{id} reference.
             deezer = self._deezer_lookup()
             if deezer:
-                # Trigger the download immediately; the retry loop will wait
-                # for Navidrome to index the local file before playing.
                 self._trigger_download(client, deezer["id"])
                 logger.info(
                     f"Triggered Deezer download for {self._title!r} "
-                    f"({deezer['id']}) — will retry"
+                    f"({deezer['id']}) — retrying until local"
                 )
-                self.not_found.emit()
+                self.downloading.emit()
             else:
                 logger.info(f"Missing track not available anywhere: {self._title!r}")
                 self.not_found.emit()

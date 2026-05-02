@@ -173,7 +173,7 @@ class PlaybackBridge(QObject):
                 else:
                     repo.update_now_playing(song_id)
             except Exception as exc:
-                if "not available locally" in str(exc) and attempt < _MAX_RETRIES:
+                if submission and "not available locally" in str(exc) and attempt < _MAX_RETRIES:
                     logger.debug(
                         f"scrobble: {song_id} not local yet — "
                         f"retry {attempt + 1}/{_MAX_RETRIES} in {_RETRY_SECS}s"
@@ -181,8 +181,8 @@ class PlaybackBridge(QObject):
                     _time.sleep(_RETRY_SECS)
                     self._server_scrobble(song_id, submission, attempt + 1)
                 else:
-                    logger.warning(f"scrobble({'submission' if submission else 'now-playing'}) "
-                                   f"failed for {song_id}: {exc}")
+                    logger.debug(f"scrobble({'submission' if submission else 'now-playing'}) "
+                                 f"failed for {song_id}: {exc}")
         threading.Thread(target=_do, daemon=True).start()
 
     # ── starred / heart ───────────────────────────────────────────────
