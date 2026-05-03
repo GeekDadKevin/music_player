@@ -97,14 +97,23 @@ class LoadTopTracksWorker(QThread):
         # artist credits, including features on other artists' songs.  Filter to
         # recordings where the credited artist name starts with our artist so we
         # don't show "Other Artist feat. ZZ Ward" in ZZ Ward's top tracks.
+        # Deduplicate by normalised recording name — the same song can appear
+        # multiple times under different recording IDs (studio vs. live, etc.).
+        import unicodedata
         name_lower = artist_name.lower()
-        tracks = []
+        tracks: list[dict] = []
+        seen_names: set[str] = set()
         for item in payload:
             credited = item.get("artist_name", "").lower()
             if not credited.startswith(name_lower):
                 continue
+            raw_name = item.get("recording_name", "Unknown")
+            norm = unicodedata.normalize("NFKD", raw_name.lower().strip())
+            if norm in seen_names:
+                continue
+            seen_names.add(norm)
             tracks.append({
-                "name": item.get("recording_name", "Unknown"),
+                "name": raw_name,
                 "listen_count": item.get("total_listen_count", 0),
             })
             if len(tracks) == 10:

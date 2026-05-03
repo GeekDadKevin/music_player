@@ -252,12 +252,17 @@ class TrackTable(QTableWidget):
 
     def _on_double_click(self, index) -> None:
         row = index.row()
-        if row in self._unmatched or row >= len(self._tracks):
+        if row >= len(self._tracks):
+            return
+        if row in self._unmatched:
+            self._play_unmatched(row)
             return
         t = self._tracks[row]
-        if t.get("_missing") or t.get("id", "").startswith("ext-"):
+        if t.get("_missing"):
             self._play_missing(t)
             return
+        # ext-deezer tracks fall through to the normal play path — mpv's stream
+        # request to Navidrome is what triggers Octofiesta, nothing else needed.
 
         track = self._tracks[row]
         from src.music_player.ui.app_settings import load_settings
@@ -333,14 +338,8 @@ class TrackTable(QTableWidget):
             self._tracks[row].get("id", "").startswith("ext-")
         ):
             t        = self._tracks[row]
-            is_ext   = t.get("id", "").startswith("ext-")
-            auto_lbl = f"{SEARCH}  Download and play" if is_ext else f"{SEARCH}  Auto-search"
-            auto_act = menu.addAction(auto_lbl)
             find_act = menu.addAction(f"{SEARCH}  Search manually…")
-            chosen   = menu.exec(self.mapToGlobal(pos))
-            if chosen == auto_act:
-                self._play_missing(t)
-            elif chosen == find_act:
+            if menu.exec(self.mapToGlobal(pos)) == find_act:
                 self._open_resolve_dialog(t)
             return
 
@@ -449,21 +448,16 @@ class TrackTable(QTableWidget):
         dlg.setWindowTitle(f"Find: {track.get('title', '?')}")
         dlg.exec()
 
-    def _play_missing(self, track: dict, attempt: int = 0) -> None:
-        """Auto-search for a missing/ext-deezer track; retry while it downloads."""
+    def _play_missing(self, track: dict) -> None:
+        """Search for a _missing track and play the best match found (once, no retry)."""
         from PyQt6.QtCore import QTimer
         from src.music_player.ui.workers.download_worker import SearchAndPlayWorker
         from src.music_player.ui.workers.image_loader import _launch
 
-        _MAX_ATTEMPTS = 18    # ~4.5 min at 15 s intervals
-        _RETRY_MS     = 15_000
-
         def _on_found(match: dict) -> None:
-            from PyQt6.QtCore import QTimer
             bridge = get_bridge()
             bridge.status_message.emit("")
 
-            # Build the playable queue with the resolved track substituted in
             playable  = []
             start_idx = 0
             for i, t in enumerate(self._tracks):
@@ -474,22 +468,15 @@ class TrackTable(QTableWidget):
                 elif i not in self._unmatched and t:
                     playable.append(t)
 
-            # Update the table row so the track shows as local (no longer grey)
             row_idx = next((i for i, t in enumerate(self._tracks) if t is track), None)
             if row_idx is not None:
                 self._tracks[row_idx] = match
                 self._style_row(row_idx)
 
-            # Only start playback if the user hasn't moved on to something else
             current = bridge._current_track
-            user_moved_on = (
-                current is not None and
-                current.get("id") != track.get("id") and
-                not current.get("id", "").startswith("ext-") and
-                bridge._controller.is_playing
-            )
-            if user_moved_on:
-                bridge.status_message.emit("Download complete — click to play")
+            if (current is not None and bridge._controller.is_playing
+                    and current.get("id") != track.get("id")):
+                bridge.status_message.emit("Found — click to play")
                 QTimer.singleShot(4000, lambda: bridge.status_message.emit(""))
                 return
 
@@ -497,28 +484,43 @@ class TrackTable(QTableWidget):
             bridge.play_track(match)
             self.highlight_track_id(match["id"])
 
-        def _on_downloading() -> None:
-            if attempt >= _MAX_ATTEMPTS:
-                get_bridge().status_message.emit("Download timed out")
-                QTimer.singleShot(4000, lambda: get_bridge().status_message.emit(""))
+        def _on_not_found() -> None:
+            get_bridge().status_message.emit("Not found — right-click to search manually")
+            QTimer.singleShot(4000, lambda: get_bridge().status_message.emit(""))
+
+        get_bridge().status_message.emit("Searching…")
+        worker = SearchAndPlayWorker(track.get("title", ""), track.get("artist", ""))
+        worker.found.connect(_on_found)
+        worker.not_found.connect(_on_not_found)
+        _launch(worker)
+
+    def _play_unmatched(self, row: int) -> None:
+        """Search for an unmatched playlist row and play the best match found."""
+        from PyQt6.QtCore import QTimer
+        from src.music_player.ui.workers.download_worker import SearchAndPlayWorker
+        from src.music_player.ui.workers.image_loader import _launch
+
+        raw = self._raw[row]
+
+        def _on_found(match: dict) -> None:
+            bridge = get_bridge()
+            bridge.status_message.emit("")
+            self.resolve_unmatched(row, match)
+            current = bridge._current_track
+            if current is not None and bridge._controller.is_playing:
+                bridge.status_message.emit("Found — click to play")
+                QTimer.singleShot(4000, lambda: bridge.status_message.emit(""))
                 return
-            next_attempt = attempt + 1
-            get_bridge().status_message.emit(f"Downloading… ({next_attempt}/{_MAX_ATTEMPTS})")
-            def _retry():
-                try:
-                    self._play_missing(track, next_attempt)
-                except RuntimeError:
-                    pass
-            QTimer.singleShot(_RETRY_MS, _retry)
+            get_queue().set_queue([match], start=0)
+            bridge.play_track(match)
+            self.highlight_track_id(match["id"])
 
         def _on_not_found() -> None:
             get_bridge().status_message.emit("Not found — right-click to search manually")
             QTimer.singleShot(4000, lambda: get_bridge().status_message.emit(""))
 
-        if attempt == 0:
-            get_bridge().status_message.emit("Searching…")
-        worker = SearchAndPlayWorker(track.get("title", ""), track.get("artist", ""))
+        get_bridge().status_message.emit("Searching…")
+        worker = SearchAndPlayWorker(raw.get("title", ""), raw.get("artist", ""))
         worker.found.connect(_on_found)
-        worker.downloading.connect(_on_downloading)
         worker.not_found.connect(_on_not_found)
         _launch(worker)

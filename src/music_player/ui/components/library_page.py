@@ -739,10 +739,94 @@ class _GenreCard(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
+        # ── hover action buttons ──────────────────────────────────────
+        from src.music_player.ui.glyphs import PLAY, SHUFFLE, QUEUE, MDL2_FONT
+        _SS = (
+            f"QPushButton{{background:rgba(0,0,0,170);color:#fff;border:none;"
+            f"border-radius:4px;font-family:'{MDL2_FONT}';font-size:13px;}}"
+            "QPushButton:hover{background:rgba(45,212,191,210);color:#000;}"
+        )
+        BW, BH, GAP = 44, 30, 4
+        x0 = (160 - (3 * BW + 2 * GAP)) // 2
+        y0 = 108   # above the genre-name / play-count text band
+
+        self._btn_shuffle = QPushButton(SHUFFLE, self)
+        self._btn_shuffle.setFixedSize(BW, BH)
+        self._btn_shuffle.move(x0, y0)
+        self._btn_shuffle.setStyleSheet(_SS)
+        self._btn_shuffle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_shuffle.clicked.connect(lambda: self._do_play(shuffle=True))
+        self._btn_shuffle.setVisible(False)
+
+        self._btn_play = QPushButton(PLAY, self)
+        self._btn_play.setFixedSize(BW, BH)
+        self._btn_play.move(x0 + BW + GAP, y0)
+        self._btn_play.setStyleSheet(_SS)
+        self._btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_play.clicked.connect(lambda: self._do_play(shuffle=False))
+        self._btn_play.setVisible(False)
+
+        self._btn_queue = QPushButton(QUEUE, self)
+        self._btn_queue.setFixedSize(BW, BH)
+        self._btn_queue.move(x0 + 2 * (BW + GAP), y0)
+        self._btn_queue.setStyleSheet(_SS)
+        self._btn_queue.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_queue.clicked.connect(lambda: self._do_queue())
+        self._btn_queue.setVisible(False)
+
+        self._hover_btns = [self._btn_shuffle, self._btn_play, self._btn_queue]
+        self._action_worker = None
+
+    def enterEvent(self, event) -> None:
+        for btn in self._hover_btns:
+            btn.setVisible(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        for btn in self._hover_btns:
+            btn.setVisible(False)
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self._genre)
         super().mousePressEvent(event)
+
+    def _do_play(self, shuffle: bool) -> None:
+        from src.music_player.ui.workers.artist_detail import LoadGenreTracksWorker
+        w = LoadGenreTracksWorker(self._genre, parent=self)
+        def _on_loaded(tracks: list) -> None:
+            if not tracks:
+                return
+            if shuffle:
+                import random
+                tracks = list(tracks)
+                random.shuffle(tracks)
+            from src.music_player.queue import get_queue
+            from src.music_player.ui.components.playback_bridge import get_bridge
+            get_queue().set_queue(tracks, start=0)
+            get_bridge().play_track(tracks[0])
+        w.tracks_loaded.connect(_on_loaded)
+        w.start()
+        self._action_worker = w
+
+    def _do_queue(self) -> None:
+        from src.music_player.ui.workers.artist_detail import LoadGenreTracksWorker
+        w = LoadGenreTracksWorker(self._genre, parent=self)
+        def _on_loaded(tracks: list) -> None:
+            if not tracks:
+                return
+            from src.music_player.queue import get_queue
+            from src.music_player.ui.components.playback_bridge import get_bridge
+            q = get_queue()
+            was_empty = q.current_index < 0
+            q.add_tracks(tracks)
+            get_bridge().queue_changed.emit()
+            if was_empty:
+                get_bridge().play_track(tracks[0])
+        w.tracks_loaded.connect(_on_loaded)
+        w.start()
+        self._action_worker = w
 
     def paintEvent(self, event) -> None:
         from PyQt6.QtGui import (

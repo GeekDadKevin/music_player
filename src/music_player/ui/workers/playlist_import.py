@@ -102,7 +102,12 @@ def _score(title1: str, artist1: str, title2: str, artist2: str) -> float:
 
 
 def find_match(client: SubsonicClient, title: str, artist: str) -> dict | None:
-    """Search Subsonic and return the best-matching song dict, or None."""
+    """Search Subsonic and return the best-matching song dict, or None.
+
+    Always prefers a locally-available song over an ext-deezer virtual entry
+    when both score above the threshold — Navidrome can hold both versions and
+    the ext-deezer one would otherwise score higher simply by appearing first.
+    """
     if not title:
         return None
 
@@ -112,13 +117,22 @@ def find_match(client: SubsonicClient, title: str, artist: str) -> dict | None:
         if candidates:
             break
 
-    best, best_score = None, 0.0
+    best_local, best_local_score = None, 0.0
+    best_ext,   best_ext_score   = None, 0.0
     for song in candidates:
         s = _score(title, artist, song.get("title", ""), song.get("artist", ""))
-        if s > best_score:
-            best_score, best = s, song
+        if song.get("id", "").startswith("ext-"):
+            if s > best_ext_score:
+                best_ext_score, best_ext = s, song
+        else:
+            if s > best_local_score:
+                best_local_score, best_local = s, song
 
-    return best if best_score >= _MATCH_THRESHOLD else None
+    if best_local_score >= _MATCH_THRESHOLD:
+        return best_local
+    if best_ext_score >= _MATCH_THRESHOLD:
+        return best_ext
+    return None
 
 
 def _trigger_download(client: SubsonicClient, song_id: str) -> None:

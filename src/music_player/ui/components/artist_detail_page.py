@@ -158,16 +158,42 @@ class ArtistDetailPage(QWidget):
         layout.addWidget(_divider())
 
         # ── discography ───────────────────────────────────────────────
-        layout.addWidget(_section_heading("Discography"))
+        # Wrap everything in a tight inner widget so the main layout's 28px
+        # spacing only applies once (above the section heading), not between
+        # every heading/grid pair inside the section.
+        disco_outer = QWidget()
+        disco_outer.setStyleSheet("background:transparent;")
+        disco_vbox = QVBoxLayout(disco_outer)
+        disco_vbox.setContentsMargins(0, 0, 0, 0)
+        disco_vbox.setSpacing(6)
+        layout.addWidget(disco_outer)
+
+        disco_vbox.addWidget(_section_heading("Discography"))
         self._albums_status = QLabel("")
         self._albums_status.setStyleSheet("color:#666; font-size:13px; background:transparent;")
-        layout.addWidget(self._albums_status)
+        disco_vbox.addWidget(self._albums_status)
 
-        self._disco_flow = FlowGrid(
-            item_width=_ALBUM_CARD_W, spacing=12, margins=(0, 0, 0, 0)
-        )
-        self._disco_flow.setStyleSheet("background:transparent;")
-        layout.addWidget(self._disco_flow)
+        # Sub-sections: Albums, EPs, Singles, Soundtracks & Compilations.
+        # Each section is a tight container (heading + grid) hidden until populated.
+        self._disco_sections: dict[str, tuple[QWidget, FlowGrid]] = {}
+        for key, label in (
+            ("album",  "Albums"),
+            ("ep",     "EPs"),
+            ("single", "Singles"),
+            ("other",  "Soundtracks & Compilations"),
+        ):
+            sec = QWidget()
+            sec.setStyleSheet("background:transparent;")
+            sec_vbox = QVBoxLayout(sec)
+            sec_vbox.setContentsMargins(0, 0, 0, 0)
+            sec_vbox.setSpacing(4)
+            sec_vbox.addWidget(_sub_heading(label))
+            flow = FlowGrid(item_width=_ALBUM_CARD_W, spacing=12, margins=(0, 0, 0, 0))
+            flow.setStyleSheet("background:transparent;")
+            sec_vbox.addWidget(flow)
+            sec.setVisible(False)
+            disco_vbox.addWidget(sec)
+            self._disco_sections[key] = (sec, flow)
 
         # ── album track panel (hidden until album clicked) ─────────────
         layout.addWidget(_divider())
@@ -193,20 +219,30 @@ class ArtistDetailPage(QWidget):
         if not albums:
             self._albums_status.setText("No albums found.")
             return
+
+        buckets: dict[str, list] = {"album": [], "ep": [], "single": [], "other": []}
         for album in albums:
-            cover_id  = album.get("coverArt", "")
-            artist    = album.get("artist", "")
-            name      = album.get("name", "")
-            img_data  = image_store.get(f"album:{cover_id}") if cover_id else None
-            card = _AlbumCard(name, album.get("year"), img_data, album)
-            card.clicked.connect(self._on_album_clicked)
-            self._disco_flow.add_widget(card)
-            # Fetch on demand if not in cache
-            if not img_data:
-                from src.music_player.ui.workers.image_loader import AlbumCoverLoader, _launch
-                loader = AlbumCoverLoader(cover_id, artist, name)
-                loader.loaded.connect(card.set_cover)
-                _launch(loader)
+            buckets[_classify_album(album)].append(album)
+
+        for key, (sec, flow) in self._disco_sections.items():
+            album_list = buckets[key]
+            if not album_list:
+                sec.setVisible(False)
+                continue
+            sec.setVisible(True)
+            for album in album_list:
+                cover_id = album.get("coverArt", "")
+                artist   = album.get("artist", "")
+                name     = album.get("name", "")
+                img_data = image_store.get(f"album:{cover_id}") if cover_id else None
+                card = _AlbumCard(name, album.get("year"), img_data, album)
+                card.clicked.connect(self._on_album_clicked)
+                flow.add_widget(card)
+                if not img_data:
+                    from src.music_player.ui.workers.image_loader import AlbumCoverLoader, _launch
+                    loader = AlbumCoverLoader(cover_id, artist, name)
+                    loader.loaded.connect(card.set_cover)
+                    _launch(loader)
 
     @pyqtSlot(dict)
     def _on_album_clicked(self, album: dict) -> None:
@@ -293,7 +329,9 @@ class ArtistDetailPage(QWidget):
         self._top_tracks_table.setVisible(False)
 
     def _clear_albums(self) -> None:
-        self._disco_flow.clear()
+        for sec, flow in self._disco_sections.values():
+            sec.setVisible(False)
+            flow.clear()
 
 
 # ── helper widgets ────────────────────────────────────────────────────
@@ -378,9 +416,61 @@ class _AlbumCard(QWidget):
         super().mousePressEvent(event)
 
 
+def _classify_album(album: dict) -> str:
+    """Return 'album', 'ep', 'single', or 'other' for a Subsonic album dict.
+
+    Uses OpenSubsonic ``releaseTypes`` / ``isCompilation`` when present, then
+    falls back to name-keyword heuristics and finally to songCount.
+    """
+    import re as _re
+
+    release_types = album.get("releaseTypes") or []
+    if isinstance(release_types, str):
+        release_types = [release_types]
+    types_lower = {t.lower() for t in release_types}
+
+    name  = album.get("name", "").lower()
+    genre = (album.get("genre") or "").lower()
+
+    # Soundtrack / compilation (checked first — highest priority)
+    if album.get("isCompilation") or "compilation" in types_lower or "compilation" in name:
+        return "other"
+    if "soundtrack" in types_lower or "soundtrack" in name or "soundtrack" in genre:
+        return "other"
+
+    # Single
+    if "single" in types_lower:
+        return "single"
+
+    # EP — releaseTypes field or name ends with "EP" as a standalone word
+    if "ep" in types_lower or _re.search(r'\bep\b', name):
+        return "ep"
+
+    # Explicit album via releaseTypes
+    if "album" in types_lower:
+        return "album"
+
+    # Fallback: no releaseTypes present — use songCount heuristic
+    song_count = album.get("songCount") or 0
+    if song_count == 1:
+        return "single"
+    if 2 <= song_count <= 4:
+        return "ep"
+    return "album"
+
+
 def _section_heading(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet("color:#fff; font-size:16px; font-weight:700; background:transparent;")
+    return lbl
+
+
+def _sub_heading(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        "color:#bbb; font-size:14px; font-weight:700; letter-spacing:0.04em;"
+        "background:transparent;"
+    )
     return lbl
 
 
