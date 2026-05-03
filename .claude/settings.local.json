@@ -23,7 +23,9 @@
       "WebFetch(domain:packages.msys2.org)",
       "WebFetch(domain:vcpkg.io)",
       "WebFetch(domain:codav.itch.io)",
-      "WebFetch(domain:api.github.com)"
+      "WebFetch(domain:api.github.com)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
