@@ -221,6 +221,7 @@ class MusicPlayerWindow(QMainWindow):
         self._viz_fullscreen = False
 
     def _setup_media_shortcuts(self) -> None:
+        """Wire media keys for when the window has focus (QShortcut) AND globally."""
         from src.music_player.ui.components.playback_bridge import get_bridge
         bridge = get_bridge()
         for key in (Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaTogglePlayPause):
@@ -228,6 +229,78 @@ class MusicPlayerWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_MediaNext), self).activated.connect(bridge.next_track)
         QShortcut(QKeySequence(Qt.Key.Key_MediaPrevious), self).activated.connect(bridge.previous_track)
         QShortcut(QKeySequence(Qt.Key.Key_MediaStop), self).activated.connect(bridge.stop)
+        self._register_global_media_keys()
+
+    def _register_global_media_keys(self) -> None:
+        """Register Win32 global hotkeys so media buttons work when app is in background.
+
+        A daemon thread runs its own Win32 message pump and calls RegisterHotKey
+        with hwnd=None so messages land in that thread's queue.  When a hotkey
+        fires the thread uses PostMessageW to forward a custom WM_APP_MEDIA
+        message to the main window's HWND, which Qt delivers via nativeEvent on
+        the main thread — safe to call bridge methods from there.
+        """
+        import sys
+        if sys.platform != "win32":
+            return
+
+        import ctypes
+        import ctypes.wintypes as _wt
+        import threading
+
+        # Custom user-defined message (WM_APP range 0x8000–0xBFFF is safe)
+        WM_APP_MEDIA = 0x8010
+        WM_HOTKEY    = 0x0312
+        # hotkey id → (modifier, virtual-key)
+        _HOTKEYS = {
+            1: (0, 0xB3),   # VK_MEDIA_PLAY_PAUSE
+            2: (0, 0xB0),   # VK_MEDIA_NEXT_TRACK
+            3: (0, 0xB1),   # VK_MEDIA_PREV_TRACK
+            4: (0, 0xB2),   # VK_MEDIA_STOP
+        }
+
+        try:
+            main_hwnd = int(self.winId())
+        except Exception as exc:
+            logger.warning(f"media keys: winId() failed: {exc}")
+            return
+
+        user32 = ctypes.windll.user32
+        self._wm_app_media = WM_APP_MEDIA
+
+        def _pump() -> None:
+            for hid, (mod, vk) in _HOTKEYS.items():
+                if not user32.RegisterHotKey(None, hid, mod, vk):
+                    logger.debug(f"media keys: RegisterHotKey id={hid} vk=0x{vk:X} failed")
+            msg = _wt.MSG()
+            while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+                if msg.message == WM_HOTKEY:
+                    # Marshal to Qt main thread via PostMessage — thread-safe
+                    user32.PostMessageW(main_hwnd, WM_APP_MEDIA, msg.wParam, 0)
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+            for hid in _HOTKEYS:
+                user32.UnregisterHotKey(None, hid)
+
+        self._media_hotkey_thread = threading.Thread(
+            target=_pump, daemon=True, name="MediaHotkeys"
+        )
+        self._media_hotkey_thread.start()
+        logger.info("Global media hotkeys registered (background)")
+
+    def nativeEvent(self, event_type: bytes, message: object) -> tuple[bool, int]:
+        if hasattr(self, "_wm_app_media"):
+            import ctypes, ctypes.wintypes as _wt
+            msg = ctypes.cast(int(message), ctypes.POINTER(_wt.MSG)).contents
+            if msg.message == self._wm_app_media:
+                from src.music_player.ui.components.playback_bridge import get_bridge
+                bridge = get_bridge()
+                {1: bridge.play_pause,
+                 2: bridge.next_track,
+                 3: bridge.previous_track,
+                 4: bridge.stop}.get(msg.wParam, lambda: None)()
+                return True, 0
+        return super().nativeEvent(event_type, message)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape and self._viz_fullscreen:

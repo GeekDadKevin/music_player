@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """SearchAndPlayWorker — resolve a _missing track to a playable Subsonic song.
 
 Resolution order:
@@ -11,21 +10,6 @@ The stream request that mpv opens when the caller plays the returned track is
 the only signal Navidrome/Octofiesta needs to start a download.  Any extra HTTP
 request to the stream endpoint (HEAD or GET) interrupts an in-progress download
 and must never be added back.
-=======
-"""SearchAndPlayWorker — resolve a missing track to something Navidrome can stream.
-
-Resolution order:
-  1. Subsonic search (find_match) — returns a match only when the primary
-     artist is similar enough to the target (avoids wrong-artist false positives).
-  2. Deezer public API fallback — if Subsonic has no usable match, we look up
-     the Deezer track ID and construct the ext-deezer-song-{id} reference that
-     Navidrome exposes.
-
-In both cases the worker emits ``found`` with the best available track dict —
-local file or ext-deezer proxy.  Playback is started by the caller; the
-stream request that mpv opens is the only signal Navidrome/Octofiesta needs
-to begin a download.  No separate "trigger" request is sent here.
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
 """
 
 import re
@@ -55,7 +39,6 @@ def _artist_ok(matched: str, target: str) -> bool:
 class SearchAndPlayWorker(QThread):
     """Resolve a _missing track to the best available playable dict.
 
-<<<<<<< HEAD
     Emits ``found`` with the track dict — either a locally-indexed song or an
     ext-deezer proxy entry.  The caller starts playback; mpv's stream request
     to Navidrome is the download trigger for Octofiesta, nothing else.
@@ -66,15 +49,6 @@ class SearchAndPlayWorker(QThread):
 
     found     = pyqtSignal(dict)   # best match (local file or ext-deezer proxy)
     not_found = pyqtSignal()       # not found in Subsonic or Deezer
-=======
-    ``not_found`` is emitted when neither Subsonic nor Deezer can locate the
-    track.  The caller is responsible for starting playback via bridge.play_track;
-    that stream request is what Navidrome/Octofiesta uses to trigger a download.
-    """
-
-    found     = pyqtSignal(dict)   # track is playable — local file or ext-deezer proxy
-    not_found = pyqtSignal()       # not found anywhere
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
 
     def __init__(self, title: str, artist: str, parent=None) -> None:
         super().__init__(parent)
@@ -88,11 +62,7 @@ class SearchAndPlayWorker(QThread):
             match  = find_match(client, self._title, self._artist)
             if match and _artist_ok(match.get("artist", ""), self._artist):
                 logger.info(
-<<<<<<< HEAD
                     f"Resolved {self._title!r} → {match['id']}"
-=======
-                    f"Resolved {self._title!r} → id={match['id']}"
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                     + (" (ext-deezer proxy)" if match["id"].startswith("ext-") else "")
                 )
                 self.found.emit(match)
@@ -101,11 +71,7 @@ class SearchAndPlayWorker(QThread):
             # Subsonic had no usable match — try Deezer for the ext-deezer reference.
             deezer = self._deezer_lookup()
             if deezer:
-<<<<<<< HEAD
                 logger.info(f"Resolved via Deezer: {self._title!r} → {deezer['id']}")
-=======
-                logger.info(f"Resolved via Deezer: {self._title!r} → id={deezer['id']}")
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                 self.found.emit(deezer)
             else:
                 logger.info(f"Track not found anywhere: {self._title!r}")
