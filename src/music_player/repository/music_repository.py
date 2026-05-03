@@ -38,13 +38,18 @@ class SubsonicMusicRepository:
 
     # ── StreamPort ────────────────────────────────────────────────────
 
-    def get_stream_url(self, track_id: str) -> str:
+    def get_stream_url(
+        self,
+        track_id: str,
+        fmt: str | None = "mp3",
+        max_bit_rate: int | None = 320,
+    ) -> str:
         """Return a stream URL for track_id.
 
         Contract: URL is session-scoped and contains auth tokens.
         Never log at INFO or above; never cache across restarts.
         """
-        return self._http.stream_url(track_id)
+        return self._http.stream_url(track_id, fmt=fmt, max_bit_rate=max_bit_rate)
 
     # ── MusicLibraryPort ──────────────────────────────────────────────
 
@@ -84,6 +89,19 @@ class SubsonicMusicRepository:
             return data.get("album")
         except (RuntimeError, Exception) as exc:
             logger.warning(f"get_album({album_id}) failed: {exc}")
+            return None
+
+    def get_song(self, song_id: str) -> dict | None:
+        """Return a single song dict by ID, or None on error.
+
+        Supports normal Navidrome/OpenSubsonic IDs and ext-* IDs when the
+        backend can resolve them via getSong.view.
+        """
+        try:
+            data = self._http.get("getSong.view", {"id": song_id})
+            return data.get("song")
+        except Exception as exc:
+            logger.warning(f"get_song({song_id}) failed: {exc}")
             return None
 
     def get_all_albums(self) -> list[dict]:
@@ -398,6 +416,21 @@ class SubsonicMusicRepository:
             "submission": "false",
         }, timeout=10.0)
         logger.debug(f"scrobble: now-playing {song_id}")
+
+    def start_scan(self) -> bool:
+        """Trigger a Navidrome library scan.
+
+        Call after triggering an Octofiesta download so Navidrome indexes the
+        new file before the next search attempt.  Non-fatal — returns False on
+        any error but does not raise.
+        """
+        try:
+            self._http.get("startScan.view", timeout=10.0)
+            logger.info("Library scan triggered")
+            return True
+        except Exception as exc:
+            logger.warning(f"start_scan failed: {exc}")
+            return False
 
     def ping(self) -> bool:
         """Return True if the server is reachable and credentials are valid."""

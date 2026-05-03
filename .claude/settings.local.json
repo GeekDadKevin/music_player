@@ -24,8 +24,13 @@
       "WebFetch(domain:vcpkg.io)",
       "WebFetch(domain:codav.itch.io)",
       "WebFetch(domain:api.github.com)",
+<<<<<<< HEAD
       "Bash(git add *)",
       "Bash(git commit -m ' *)"
+=======
+      "Bash(gh api *)",
+      "WebFetch(domain:opensubsonic.netlify.app)"
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
     ]
   }
 }

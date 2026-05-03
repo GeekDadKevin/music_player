@@ -149,6 +149,7 @@ class PlaybackBridge(QObject):
             self._server_scrobble(self._current_track, submission=True)
 
     def _server_scrobble(self, track: dict, submission: bool) -> None:
+<<<<<<< HEAD
         """Fire-and-forget scrobble using the OpenSubsonic scrobble.view endpoint.
 
         Behaviour mirrors Feishin / the OpenSubsonic spec:
@@ -174,6 +175,21 @@ class PlaybackBridge(QObject):
 
         NEVER add a separate HTTP request to stream.view here.  mpv's own stream
         connection is the Octofiesta download trigger; any extra request cancels it.
+=======
+        """Fire-and-forget scrobble with ext-deezer → local ID resolution.
+
+        For ext-deezer-* tracks:
+        - Navidrome rejects both now-playing and submission scrobbles until the
+          file is indexed locally ("not available locally yet").
+        - Before the first attempt we trigger a scan and look for the local song
+          ID so the scrobble uses the proper local entry (important for Last.fm /
+          ListenBrainz forwarding — Navidrome may not forward ext-deezer scrobbles).
+        - On each failed attempt we scan again and re-check for the local ID.
+        - submission retries up to 18×15 s (~4.5 min).
+        - now-playing retries up to 6×15 s (~90 s) — informational, fewer tries.
+
+        For normal local tracks: single attempt, no retry.
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
         """
         import threading
         from src.music_player.ui.app_settings import load_settings
@@ -182,12 +198,16 @@ class PlaybackBridge(QObject):
 
         song_id    = track.get("id", "")
         is_ext     = song_id.startswith("ext-")
+<<<<<<< HEAD
         # Retry budget: submission ext → 18 retries; now-playing ext → 6; local → 1
+=======
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
         max_tries  = (18 if submission else 6) if is_ext else 1
         retry_secs = 15
 
         from src.music_player.services import get_repository
 
+<<<<<<< HEAD
         def _find_local(repo, title: str, artist: str) -> str | None:
             import re as _re
             from difflib import SequenceMatcher
@@ -202,6 +222,28 @@ class PlaybackBridge(QObject):
                             return cid
                 except Exception:
                     pass
+=======
+        def _find_local_id(repo, title: str, artist: str) -> str | None:
+            """Search Navidrome for a non-ext version of this track."""
+            from difflib import SequenceMatcher
+            import re
+            # Strip parentheticals from the title for a cleaner search query
+            simple = re.sub(r'\s*\(.*?\)', '', title).strip()
+            for query in (f"{simple} {artist}".strip(), simple, title):
+                try:
+                    results = repo.search(query, song_count=10)
+                except Exception:
+                    continue
+                for c in results:
+                    cid = c.get("id", "")
+                    if cid.startswith("ext-"):
+                        continue
+                    sim = SequenceMatcher(
+                        None, c.get("title", "").lower(), title.lower()
+                    ).ratio()
+                    if sim >= 0.7:
+                        return cid
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
             return None
 
         def _do() -> None:
@@ -210,13 +252,24 @@ class PlaybackBridge(QObject):
             title      = track.get("title", "")
             artist     = track.get("artist", "")
 
+<<<<<<< HEAD
             # Pre-flight for ext-deezer: scan + look for local ID before first attempt.
+=======
+            # For ext-deezer tracks: scan + resolve to local ID before first attempt.
+            # Navidrome won't forward scrobbles for ext IDs to Last.fm/ListenBrainz;
+            # using the local ID ensures proper forwarding once the file is indexed.
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
             if is_ext:
                 try:
                     repo = get_repository()
                     repo.start_scan()
+<<<<<<< HEAD
                     _time.sleep(3)
                     local = _find_local(repo, title, artist)
+=======
+                    _time.sleep(3)   # brief window for the scan to index the file
+                    local = _find_local_id(repo, title, artist)
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                     if local:
                         logger.info(f"scrobble: resolved {song_id!r} → local {local!r}")
                         current_id = local
@@ -232,7 +285,11 @@ class PlaybackBridge(QObject):
                         repo.update_now_playing(current_id)
                     logger.debug(
                         f"scrobble({'submission' if submission else 'now-playing'}): "
+<<<<<<< HEAD
                         f"ok {current_id!r}"
+=======
+                        f"ok for {current_id!r}"
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                         + (f" (resolved from {song_id!r})" if current_id != song_id else "")
                     )
                     return
@@ -241,13 +298,18 @@ class PlaybackBridge(QObject):
                     if attempt < max_tries - 1:
                         logger.debug(
                             f"scrobble({label}): {current_id!r} not ready "
+<<<<<<< HEAD
                             f"(attempt {attempt+1}/{max_tries}): {exc}"
+=======
+                            f"(attempt {attempt + 1}/{max_tries}): {exc}"
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                         )
                         try:
                             get_repository().start_scan()
                         except Exception:
                             pass
                         _time.sleep(retry_secs)
+<<<<<<< HEAD
                         if current_id.startswith("ext-") and title:
                             try:
                                 local = _find_local(get_repository(), title, artist)
@@ -255,6 +317,16 @@ class PlaybackBridge(QObject):
                                     logger.info(
                                         f"scrobble: resolved {song_id!r} → local {local!r} "
                                         f"on retry {attempt+1}"
+=======
+                        # Re-check for a local ID after each scan/wait cycle
+                        if current_id.startswith("ext-"):
+                            try:
+                                local = _find_local_id(get_repository(), title, artist)
+                                if local:
+                                    logger.info(
+                                        f"scrobble: resolved {song_id!r} → local {local!r} "
+                                        f"on retry {attempt + 1}"
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                                     )
                                     current_id = local
                             except Exception:
@@ -319,11 +391,17 @@ class PlaybackBridge(QObject):
 
     def _on_track_ended(self) -> None:
         logger.info("Track ended — advancing queue")
-        # Scrobble now if threshold was never crossed (short track, late skip, etc.)
+        # Scrobble on natural end if threshold was never crossed (short track,
+        # late skip, etc.).  Guard against spurious EOF at t=0 (stream error,
+        # instant skip) by requiring at least a few seconds of actual playback.
         if not self._play_counted and self._current_track:
             from src.music_player.repository.play_history_db import record_play
             secs = int(self._controller.time_pos or 0)
+<<<<<<< HEAD
             if secs >= 5:   # ignore spurious EOF at t=0 (stream error, instant skip)
+=======
+            if secs >= 5:
+>>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                 record_play(self._current_track, secs)
                 self._server_scrobble(self._current_track, submission=True)
                 self._play_counted = True
