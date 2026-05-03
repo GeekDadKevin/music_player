@@ -8,3 +8,8 @@ logs/
 lib/
 dist/
 
+# Python bytecode — never commit
+__pycache__/
+*.py[cod]
+*.pyo
+

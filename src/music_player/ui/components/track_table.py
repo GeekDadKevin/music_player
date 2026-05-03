@@ -261,13 +261,8 @@ class TrackTable(QTableWidget):
         if t.get("_missing"):
             self._play_missing(t)
             return
-<<<<<<< HEAD
         # ext-deezer tracks fall through to the normal play path — mpv's stream
         # request to Navidrome is what triggers Octofiesta, nothing else needed.
-=======
-        # ext-deezer tracks fall through to the normal play path below —
-        # mpv's stream request is all Navidrome/Octofiesta needs to start downloading.
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
 
         track = self._tracks[row]
         from src.music_player.ui.app_settings import load_settings
@@ -342,39 +337,10 @@ class TrackTable(QTableWidget):
             self._tracks[row].get("_missing") or
             self._tracks[row].get("id", "").startswith("ext-")
         ):
-<<<<<<< HEAD
             t        = self._tracks[row]
             find_act = menu.addAction(f"{SEARCH}  Search manually…")
             if menu.exec(self.mapToGlobal(pos)) == find_act:
                 self._open_resolve_dialog(t)
-=======
-            t      = self._tracks[row]
-            is_ext = t.get("id", "").startswith("ext-")
-            if is_ext:
-                # ext-deezer tracks stream via Navidrome/Octofiesta automatically
-                # when mpv opens the connection — just play directly.
-                play_act = menu.addAction(f"{PLAY}  Play Now")
-                find_act = menu.addAction(f"{SEARCH}  Search manually…")
-                chosen   = menu.exec(self.mapToGlobal(pos))
-                if chosen == play_act:
-                    playable = [
-                        tr for i, tr in enumerate(self._tracks)
-                        if i not in self._unmatched and tr and not tr.get("_missing")
-                    ]
-                    idx = playable.index(t) if t in playable else 0
-                    get_queue().set_queue(playable, start=idx)
-                    get_bridge().play_track(t)
-                elif chosen == find_act:
-                    self._open_resolve_dialog(t)
-            else:
-                auto_act = menu.addAction(f"{SEARCH}  Auto-search")
-                find_act = menu.addAction(f"{SEARCH}  Search manually…")
-                chosen   = menu.exec(self.mapToGlobal(pos))
-                if chosen == auto_act:
-                    self._play_missing(t)
-                elif chosen == find_act:
-                    self._open_resolve_dialog(t)
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
             return
 
         track    = self._tracks[row]
@@ -483,11 +449,7 @@ class TrackTable(QTableWidget):
         dlg.exec()
 
     def _play_missing(self, track: dict) -> None:
-<<<<<<< HEAD
         """Search for a _missing track and play the best match found (once, no retry)."""
-=======
-        """Search for a _missing track and play the best match found."""
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
         from PyQt6.QtCore import QTimer
         from src.music_player.ui.workers.download_worker import SearchAndPlayWorker
         from src.music_player.ui.workers.image_loader import _launch
@@ -496,10 +458,6 @@ class TrackTable(QTableWidget):
             bridge = get_bridge()
             bridge.status_message.emit("")
 
-<<<<<<< HEAD
-=======
-            # Build playable queue with the resolved track substituted in
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
             playable  = []
             start_idx = 0
             for i, t in enumerate(self._tracks):
@@ -516,13 +474,8 @@ class TrackTable(QTableWidget):
                 self._style_row(row_idx)
 
             current = bridge._current_track
-<<<<<<< HEAD
             if (current is not None and bridge._controller.is_playing
                     and current.get("id") != track.get("id")):
-=======
-            if current is not None and bridge._controller.is_playing and \
-                    current.get("id") != track.get("id"):
->>>>>>> afc523b69e5e46e1c85ac366e6b1e0f2c49b543c
                 bridge.status_message.emit("Found — click to play")
                 QTimer.singleShot(4000, lambda: bridge.status_message.emit(""))
                 return
