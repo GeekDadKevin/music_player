@@ -31,9 +31,18 @@ class StartupCacheWorker(QThread):
             count = image_store.preload()
             self.progress.emit(0, 0, f"Loaded {count} cached images")
 
-            # 2. Fetch artist, album, and playlist lists in parallel
-            self.progress.emit(0, 0, "Connecting to library…")
+            # 2. Trigger a library scan so any songs downloaded while the app
+            #    was closed get indexed before we fetch the album/artist lists.
+            self.progress.emit(0, 0, "Scanning library for new files…")
             client = SubsonicClient()
+            try:
+                client.start_scan()
+                logger.info("Startup library scan triggered")
+            except Exception as exc:
+                logger.warning(f"Startup scan failed (non-fatal): {exc}")
+
+            # 3. Fetch artist, album, and playlist lists in parallel
+            self.progress.emit(0, 0, "Connecting to library…")
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                 af = pool.submit(client.get_artists)
                 lf = pool.submit(client.get_all_albums)

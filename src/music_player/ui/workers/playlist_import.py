@@ -121,15 +121,6 @@ def find_match(client: SubsonicClient, title: str, artist: str) -> dict | None:
     return best if best_score >= _MATCH_THRESHOLD else None
 
 
-def _trigger_download(client: SubsonicClient, song_id: str) -> None:
-    """Fire-and-forget HEAD request to tell Octofiesta to download the song."""
-    try:
-        url = client.get_stream_url(song_id)
-        _requests.head(url, timeout=4)
-    except Exception:
-        pass
-
-
 # ── worker ────────────────────────────────────────────────────────────
 
 class PlaylistImportWorker(QThread):
@@ -175,8 +166,6 @@ class PlaylistImportWorker(QThread):
             for i, raw in enumerate(raw_tracks):
                 self.progress.emit(i, total, f"Matching {i + 1}/{total}: {raw.get('title', '?')}")
                 matched = find_match(client, raw.get("title", ""), raw.get("artist", ""))
-                if matched:
-                    _trigger_download(client, matched["id"])
                 self.track_result.emit(i, matched, raw)
 
             self.finished.emit(title)

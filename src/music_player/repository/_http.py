@@ -132,7 +132,12 @@ class SubsonicHttp:
         resp.raise_for_status()
         return resp.content
 
-    def stream_url(self, track_id: str) -> str:
+    def stream_url(
+        self,
+        track_id: str,
+        fmt: str | None = "mp3",
+        max_bit_rate: int | None = 320,
+    ) -> str:
         """Return a fully-formed stream URL for a Subsonic song ID.
 
         The URL embeds auth tokens; treat it as a short-lived secret.
@@ -140,5 +145,9 @@ class SubsonicHttp:
         """
         params = self.auth_params()
         params["id"] = track_id
+        if fmt and fmt != "raw":
+            params["format"] = fmt
+            if max_bit_rate is not None:
+                params["maxBitRate"] = str(max_bit_rate)
         url = f"{self.server_url}/rest/stream.view"
         return str(self._session.build_request("GET", url, params=params).url)

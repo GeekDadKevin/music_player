@@ -78,7 +78,7 @@ class PlaybackBridge(QObject):
         self.playback_state_changed.emit(True)
         self.star_state_changed.emit(track.get("id", "") in self._starred_ids)
         logger.info(f"play_track: {track.get('title')!r}")
-        self._server_scrobble(track["id"], submission=False)
+        self._server_scrobble(track, submission=False)
 
     def play_pause(self) -> None:
         if self._current_track is None:
@@ -146,43 +146,118 @@ class PlaybackBridge(QObject):
         if time_pos >= threshold:
             self._play_counted = True
             record_play(self._current_track, int(time_pos))
-            self._server_scrobble(self._current_track["id"], submission=True)
+            self._server_scrobble(self._current_track, submission=True)
 
-    def _server_scrobble(self, song_id: str, submission: bool, attempt: int = 0) -> None:
-        """Fire-and-forget server scrobble; retries if the track isn't local yet.
+    def _server_scrobble(self, track: dict, submission: bool) -> None:
+        """Fire-and-forget scrobble with ext-deezer → local ID resolution.
 
-        Navidrome returns error code 70 for ext-deezer-* songs that are still
-        being downloaded by Octofiesta.  We sleep and retry in the same daemon
-        thread until the track becomes available or we exhaust attempts.
+        For ext-deezer-* tracks:
+        - Navidrome rejects both now-playing and submission scrobbles until the
+          file is indexed locally ("not available locally yet").
+        - Before the first attempt we trigger a scan and look for the local song
+          ID so the scrobble uses the proper local entry (important for Last.fm /
+          ListenBrainz forwarding — Navidrome may not forward ext-deezer scrobbles).
+        - On each failed attempt we scan again and re-check for the local ID.
+        - submission retries up to 18×15 s (~4.5 min).
+        - now-playing retries up to 6×15 s (~90 s) — informational, fewer tries.
+
+        For normal local tracks: single attempt, no retry.
         """
         import threading
         from src.music_player.ui.app_settings import load_settings
         if not load_settings().scrobble_enabled:
             return
 
-        _MAX_RETRIES = 18   # ~4.5 minutes at 15 s intervals
-        _RETRY_SECS  = 15
+        song_id    = track.get("id", "")
+        is_ext     = song_id.startswith("ext-")
+        max_tries  = (18 if submission else 6) if is_ext else 1
+        retry_secs = 15
 
         from src.music_player.services import get_repository
+
+        def _find_local_id(repo, title: str, artist: str) -> str | None:
+            """Search Navidrome for a non-ext version of this track."""
+            from difflib import SequenceMatcher
+            import re
+            # Strip parentheticals from the title for a cleaner search query
+            simple = re.sub(r'\s*\(.*?\)', '', title).strip()
+            for query in (f"{simple} {artist}".strip(), simple, title):
+                try:
+                    results = repo.search(query, song_count=10)
+                except Exception:
+                    continue
+                for c in results:
+                    cid = c.get("id", "")
+                    if cid.startswith("ext-"):
+                        continue
+                    sim = SequenceMatcher(
+                        None, c.get("title", "").lower(), title.lower()
+                    ).ratio()
+                    if sim >= 0.7:
+                        return cid
+            return None
+
         def _do() -> None:
             import time as _time
-            try:
-                repo = get_repository()
-                if submission:
-                    repo.scrobble(song_id)
-                else:
-                    repo.update_now_playing(song_id)
-            except Exception as exc:
-                if submission and "not available locally" in str(exc) and attempt < _MAX_RETRIES:
+            current_id = song_id
+            title      = track.get("title", "")
+            artist     = track.get("artist", "")
+
+            # For ext-deezer tracks: scan + resolve to local ID before first attempt.
+            # Navidrome won't forward scrobbles for ext IDs to Last.fm/ListenBrainz;
+            # using the local ID ensures proper forwarding once the file is indexed.
+            if is_ext:
+                try:
+                    repo = get_repository()
+                    repo.start_scan()
+                    _time.sleep(3)   # brief window for the scan to index the file
+                    local = _find_local_id(repo, title, artist)
+                    if local:
+                        logger.info(f"scrobble: resolved {song_id!r} → local {local!r}")
+                        current_id = local
+                except Exception:
+                    pass
+
+            for attempt in range(max_tries):
+                try:
+                    repo = get_repository()
+                    if submission:
+                        repo.scrobble(current_id)
+                    else:
+                        repo.update_now_playing(current_id)
                     logger.debug(
-                        f"scrobble: {song_id} not local yet — "
-                        f"retry {attempt + 1}/{_MAX_RETRIES} in {_RETRY_SECS}s"
+                        f"scrobble({'submission' if submission else 'now-playing'}): "
+                        f"ok for {current_id!r}"
+                        + (f" (resolved from {song_id!r})" if current_id != song_id else "")
                     )
-                    _time.sleep(_RETRY_SECS)
-                    self._server_scrobble(song_id, submission, attempt + 1)
-                else:
-                    logger.debug(f"scrobble({'submission' if submission else 'now-playing'}) "
-                                 f"failed for {song_id}: {exc}")
+                    return
+                except Exception as exc:
+                    label = "submission" if submission else "now-playing"
+                    if attempt < max_tries - 1:
+                        logger.debug(
+                            f"scrobble({label}): {current_id!r} not ready "
+                            f"(attempt {attempt + 1}/{max_tries}): {exc}"
+                        )
+                        try:
+                            get_repository().start_scan()
+                        except Exception:
+                            pass
+                        _time.sleep(retry_secs)
+                        # Re-check for a local ID after each scan/wait cycle
+                        if current_id.startswith("ext-"):
+                            try:
+                                local = _find_local_id(get_repository(), title, artist)
+                                if local:
+                                    logger.info(
+                                        f"scrobble: resolved {song_id!r} → local {local!r} "
+                                        f"on retry {attempt + 1}"
+                                    )
+                                    current_id = local
+                            except Exception:
+                                pass
+                    else:
+                        logger.debug(f"scrobble({label}) gave up for {current_id!r}: {exc}")
+
         threading.Thread(target=_do, daemon=True).start()
 
     # ── starred / heart ───────────────────────────────────────────────
@@ -240,13 +315,16 @@ class PlaybackBridge(QObject):
 
     def _on_track_ended(self) -> None:
         logger.info("Track ended — advancing queue")
-        # Scrobble now if threshold was never crossed (short track, late skip, etc.)
+        # Scrobble on natural end if threshold was never crossed (short track,
+        # late skip, etc.).  Guard against spurious EOF at t=0 (stream error,
+        # instant skip) by requiring at least a few seconds of actual playback.
         if not self._play_counted and self._current_track:
             from src.music_player.repository.play_history_db import record_play
             secs = int(self._controller.time_pos or 0)
-            record_play(self._current_track, secs)
-            self._server_scrobble(self._current_track["id"], submission=True)
-            self._play_counted = True
+            if secs >= 5:
+                record_play(self._current_track, secs)
+                self._server_scrobble(self._current_track, submission=True)
+                self._play_counted = True
         self.status_message.emit("")
         nxt = get_queue().advance()
         if nxt:
