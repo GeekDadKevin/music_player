@@ -1,12 +1,16 @@
-"""SearchAndPlayWorker — resolve a missing track so Octofiesta can download it.
+"""SearchAndPlayWorker — resolve a missing track to something Navidrome can stream.
 
 Resolution order:
   1. Subsonic search (find_match) — returns a match only when the primary
      artist is similar enough to the target (avoids wrong-artist false positives).
   2. Deezer public API fallback — if Subsonic has no usable match, we look up
      the Deezer track ID and construct the ext-deezer-song-{id} reference that
-     Navidrome exposes.  Playing that stream URL triggers the Octofiesta download
-     even when Navidrome's ext-deezer metadata is wrong or missing.
+     Navidrome exposes.
+
+In both cases the worker emits ``found`` with the best available track dict —
+local file or ext-deezer proxy.  Playback is started by the caller; the
+stream request that mpv opens is the only signal Navidrome/Octofiesta needs
+to begin a download.  No separate "trigger" request is sent here.
 """
 
 import re
@@ -36,13 +40,13 @@ def _artist_ok(matched: str, target: str) -> bool:
 class SearchAndPlayWorker(QThread):
     """Resolve a missing track to a playable dict and emit ``found``.
 
-    ``not_found`` is emitted when both Subsonic and Deezer searches come up
-    empty, so the caller can retry later (e.g. while Octofiesta is downloading).
+    ``not_found`` is emitted when neither Subsonic nor Deezer can locate the
+    track.  The caller is responsible for starting playback via bridge.play_track;
+    that stream request is what Navidrome/Octofiesta uses to trigger a download.
     """
 
-    found       = pyqtSignal(dict)
-    not_found   = pyqtSignal()   # nothing found anywhere — give up
-    downloading = pyqtSignal()   # ext-deezer found, download triggered — retry
+    found     = pyqtSignal(dict)   # track is playable — local file or ext-deezer proxy
+    not_found = pyqtSignal()       # not found anywhere
 
     def __init__(self, title: str, artist: str, parent=None) -> None:
         super().__init__(parent)
@@ -55,18 +59,10 @@ class SearchAndPlayWorker(QThread):
             client = SubsonicClient()
             match  = find_match(client, self._title, self._artist)
             if match and _artist_ok(match.get("artist", ""), self._artist):
-                if match.get("id", "").startswith("ext-"):
-                    # Track is in the catalog but not yet downloaded locally.
-                    # Trigger the download and let the caller retry until the
-                    # local file is indexed by Navidrome.
-                    self._trigger_download(client, match["id"])
-                    logger.info(
-                        f"Triggered download for ext track {self._title!r} "
-                        f"({match['id']}) — retrying until local"
-                    )
-                    self.downloading.emit()
-                    return
-                logger.info(f"Resolved via Subsonic: {self._title!r} → id={match['id']}")
+                logger.info(
+                    f"Resolved {self._title!r} → id={match['id']}"
+                    + (" (ext-deezer proxy)" if match["id"].startswith("ext-") else "")
+                )
                 self.found.emit(match)
                 return
 
@@ -74,27 +70,14 @@ class SearchAndPlayWorker(QThread):
             # Try Deezer to get the canonical ext-deezer-song-{id} reference.
             deezer = self._deezer_lookup()
             if deezer:
-                self._trigger_download(client, deezer["id"])
-                logger.info(
-                    f"Triggered Deezer download for {self._title!r} "
-                    f"({deezer['id']}) — retrying until local"
-                )
-                self.downloading.emit()
+                logger.info(f"Resolved via Deezer: {self._title!r} → id={deezer['id']}")
+                self.found.emit(deezer)
             else:
-                logger.info(f"Missing track not available anywhere: {self._title!r}")
+                logger.info(f"Track not found anywhere: {self._title!r}")
                 self.not_found.emit()
         except Exception as exc:
             logger.error(f"SearchAndPlayWorker error: {exc}")
             self.not_found.emit()
-
-    def _trigger_download(self, client: SubsonicClient, song_id: str) -> None:
-        """Fire a HEAD request to the stream URL — tells Navidrome/Octofiesta to download."""
-        try:
-            import requests as _req
-            url = client.get_stream_url(song_id)
-            _req.head(url, timeout=4)
-        except Exception:
-            pass
 
     def _deezer_lookup(self) -> dict | None:
         """Search Deezer's public API and return a synthetic ext-deezer dict."""
