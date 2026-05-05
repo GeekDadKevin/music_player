@@ -2,6 +2,52 @@
 
 A desktop music player (PyQt6 GUI) that streams from an OpenSubsonic server (Navidrome).
 
+## Git
+All git operations (commit, push, branch, merge, rebase) are handled by the user.
+Do not run any git commands unless explicitly asked.
+
+---
+
+## CRASH-PREVENTION RULES (hard-won — do not violate)
+
+These rules were derived from 3 days of debugging deterministic crashes on PyQt6 6.11 / Python 3.13.9 / Windows 11 24H2.
+
+### 1. Never override `nativeEvent()` in any QMainWindow/QWidget subclass
+PyQt6 6.11 installs a native event filter **during** `CreateWindowExW` when `nativeEvent` is overridden. This causes a deterministic `access violation` inside `window.show()` — every single launch, no exception. The crash is silent and produces no useful Python traceback.
+
+For Win32 hotkey dispatch, use a `_HotkeySignaler(QObject)` with `pyqtSignal(int)` — a pump thread emits the signal and Qt delivers it to the main thread via queued connection. See `app.py::_HotkeySignaler` and `_register_global_media_keys()`.
+
+### 2. Never set `QSurfaceFormat.setDefaultFormat()` at startup
+A global 3.3-Core format forces Qt to create a Core Profile WGL context for the main window's backing store during `window.show()`, which crashes on some GPU driver configurations. Set the format per-widget inside `MilkdropWidget.__init__()` with `self.setFormat(fmt)` instead.
+
+### 3. Never import `milkdrop_widget` at module level in any UI file
+`milkdrop_widget.py` loads projectM-4.dll, GLEW, and PortAudio (via sounddevice) at module-import time. Their `DllMain` hooks can crash during `CreateWindowExW`. Import it lazily inside `VisualizerPanel.showEvent()` (only when the user opens the visualizer).
+
+### 4. Never create `MpvAudioBackend` before `window.show()` returns
+libmpv starts internal C threads. Defer all libmpv creation until after `window.show()` completes. Use `PlaybackBridge.init_audio()` called from `on_ready()` after `window.show()`. In `MpvAudioBackend.__init__()`, use `mpv.MPV(start_event_thread=False)` and start the event thread manually via `start_event_thread()` inside `init_audio()`.
+
+### 5. Never share a single `httpx.Client` across concurrent `ThreadPoolExecutor` tasks
+Sharing one client causes concurrent SSL connection-pool operations that corrupt OpenSSL state → `Windows fatal exception: code 0xe24c4a02` + access violation in `ssl.py _SSLContext.__new__`. Each task must create its own `SubsonicClient()`:
+```python
+# WRONG
+af = pool.submit(client.get_artists)
+# CORRECT
+af = pool.submit(lambda: SubsonicClient().get_artists())
+```
+
+### 6. Use one shared httpx.Client; create it before any DLL loads
+After `libmpv.dll` enters the process, creating a new `ssl.SSLContext` (via `httpx.Client()`) crashes on Python 3.13.9 / Windows 11 with code `0xe24c4a02`. Fix: `_http.py` has a `_SHARED_SESSION` singleton. `main()` calls `_get_session()` before `QApplication` to establish the one ssl context. All `SubsonicHttp` instances reuse it. No new ssl context is ever created post-DLL-load.
+
+Also pre-import `requests` so urllib3's ssl init happens on the main thread:
+```python
+from src.music_player.repository._http import _get_session as _warm_http
+_warm_http(); del _warm_http
+import requests as _req; _req.Session(); del _req
+```
+
+### 7. Never use faulthandler.enable() in production
+`faulthandler` on Windows uses `AddVectoredExceptionHandler` and catches **all** SEH exceptions — including Python 3.13's own internal exception-propagation code `0xe24c4a02`. Every normal network error (timeout, connection reset) in a background thread appears as a fatal crash, and faulthandler's own stack-walk triggers a secondary access violation. faulthandler is useful only as a short-term diagnostic for real segfaults; remove it when done.
+
 ## Commands
 - `uv run .\main.py` — launch the GUI
 - `uv run pytest` — run tests

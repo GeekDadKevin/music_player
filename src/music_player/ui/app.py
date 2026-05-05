@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSettings, pyqtSlot
+from PyQt6.QtCore import Qt, QObject, QSettings, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QHBoxLayout, QMainWindow,
@@ -19,6 +19,17 @@ from src.music_player.ui.glyphs import MDL2_FONT
 from src.music_player.ui.sidebar_widget import SidebarWidget
 
 logger = get_logger(__name__)
+
+
+class _HotkeySignaler(QObject):
+    """Carries Win32 RegisterHotKey events from the pump thread to the Qt main thread.
+
+    Emitting a pyqtSignal from a non-Qt thread on a QObject that lives in the
+    main thread delivers the signal via the main-thread event loop (queued
+    connection) — no nativeEvent override needed, no raw PostMessageW.
+    """
+    fired = pyqtSignal(int)   # hotkey ID: 1=play/pause 2=next 3=prev 4=stop
+
 
 # Page indices in the QStackedWidget
 _IDX_BROWSE    = 0
@@ -113,7 +124,7 @@ class MusicPlayerWindow(QMainWindow):
         self._viz_fullscreen = False
         self._stack.setCurrentIndex(_IDX_BROWSE)
         self._restore_state()
-        self._setup_media_shortcuts()
+        # Media shortcuts wired in showEvent() after the HWND exists.
 
     # ── window state persistence ──────────────────────────────────────
 
@@ -122,6 +133,8 @@ class MusicPlayerWindow(QMainWindow):
         super().closeEvent(event)
 
     def _save_state(self) -> None:
+        if self._viz_fullscreen:
+            return  # never save geometry during viz fullscreen — it would restore fullscreen on next launch
         _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         s = QSettings(str(_SETTINGS_FILE), QSettings.Format.IniFormat)
         s.setValue("window/geometry", self.saveGeometry())
@@ -132,6 +145,11 @@ class MusicPlayerWindow(QMainWindow):
         geom = s.value("window/geometry")
         if geom:
             self.restoreGeometry(geom)
+            # Strip fullscreen state — restoreGeometry can re-apply a FS flag
+            # saved from a previous viz-fullscreen session, hiding all window chrome.
+            state = self.windowState()
+            if state & Qt.WindowState.WindowFullScreen:
+                self.setWindowState(state & ~Qt.WindowState.WindowFullScreen)
         sizes = s.value("window/splitter")
         if sizes:
             try:
@@ -220,17 +238,6 @@ class MusicPlayerWindow(QMainWindow):
         self._viz_panel.set_fullscreen_active(False)
         self._viz_fullscreen = False
 
-    def _setup_media_shortcuts(self) -> None:
-        """Wire media keys for when the window has focus (QShortcut) AND globally."""
-        from src.music_player.ui.components.playback_bridge import get_bridge
-        bridge = get_bridge()
-        for key in (Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaTogglePlayPause):
-            QShortcut(QKeySequence(key), self).activated.connect(bridge.play_pause)
-        QShortcut(QKeySequence(Qt.Key.Key_MediaNext), self).activated.connect(bridge.next_track)
-        QShortcut(QKeySequence(Qt.Key.Key_MediaPrevious), self).activated.connect(bridge.previous_track)
-        QShortcut(QKeySequence(Qt.Key.Key_MediaStop), self).activated.connect(bridge.stop)
-        self._register_global_media_keys()
-
     def _register_global_media_keys(self) -> None:
         """Register Win32 global hotkeys so media buttons work when app is in background.
 
@@ -259,14 +266,19 @@ class MusicPlayerWindow(QMainWindow):
             4: (0, 0xB2),   # VK_MEDIA_STOP
         }
 
-        try:
-            main_hwnd = int(self.winId())
-        except Exception as exc:
-            logger.warning(f"media keys: winId() failed: {exc}")
-            return
+        # Signal-based dispatch: pump thread emits fired(hid) which Qt delivers
+        # to the main thread via queued connection.  No PostMessageW or
+        # nativeEvent override — overriding nativeEvent in PyQt6 6.11 installs
+        # a native event filter during HWND creation and causes an AV crash.
+        from src.music_player.ui.components.playback_bridge import get_bridge
+        bridge = get_bridge()
+        signaler = _HotkeySignaler(self)
+        self._hotkey_signaler = signaler   # keep alive for lifetime of window
+        actions = {1: bridge.play_pause, 2: bridge.next_track,
+                   3: bridge.previous_track, 4: bridge.stop}
+        signaler.fired.connect(lambda hid: actions.get(hid, lambda: None)())
 
         user32 = ctypes.windll.user32
-        self._wm_app_media = WM_APP_MEDIA
 
         def _pump() -> None:
             for hid, (mod, vk) in _HOTKEYS.items():
@@ -275,8 +287,7 @@ class MusicPlayerWindow(QMainWindow):
             msg = _wt.MSG()
             while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
                 if msg.message == WM_HOTKEY:
-                    # Marshal to Qt main thread via PostMessage — thread-safe
-                    user32.PostMessageW(main_hwnd, WM_APP_MEDIA, msg.wParam, 0)
+                    signaler.fired.emit(int(msg.wParam))
                 user32.TranslateMessage(ctypes.byref(msg))
                 user32.DispatchMessageW(ctypes.byref(msg))
             for hid in _HOTKEYS:
@@ -288,19 +299,22 @@ class MusicPlayerWindow(QMainWindow):
         self._media_hotkey_thread.start()
         logger.info("Global media hotkeys registered (background)")
 
-    def nativeEvent(self, event_type: bytes, message: object) -> tuple[bool, int]:
-        if hasattr(self, "_wm_app_media"):
-            import ctypes, ctypes.wintypes as _wt
-            msg = ctypes.cast(int(message), ctypes.POINTER(_wt.MSG)).contents
-            if msg.message == self._wm_app_media:
-                from src.music_player.ui.components.playback_bridge import get_bridge
-                bridge = get_bridge()
-                {1: bridge.play_pause,
-                 2: bridge.next_track,
-                 3: bridge.previous_track,
-                 4: bridge.stop}.get(msg.wParam, lambda: None)()
-                return True, 0
-        return super().nativeEvent(event_type, message)
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not hasattr(self, "_media_keys_registered"):
+            self._media_keys_registered = True
+            # Wire QShortcuts now — HWND exists, safe to register platform shortcuts.
+            from src.music_player.ui.components.playback_bridge import get_bridge
+            bridge = get_bridge()
+            for key in (Qt.Key.Key_MediaPlay, Qt.Key.Key_MediaTogglePlayPause):
+                QShortcut(QKeySequence(key), self).activated.connect(bridge.play_pause)
+            QShortcut(QKeySequence(Qt.Key.Key_MediaNext), self).activated.connect(bridge.next_track)
+            QShortcut(QKeySequence(Qt.Key.Key_MediaPrevious), self).activated.connect(bridge.previous_track)
+            QShortcut(QKeySequence(Qt.Key.Key_MediaStop), self).activated.connect(bridge.stop)
+            # Win32 global hotkeys (background) — defer one cycle so winId()
+            # is fully stable before RegisterHotKey is called.
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, self._register_global_media_keys)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape and self._viz_fullscreen:

@@ -19,7 +19,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from src.music_player.logging import get_logger
 from src.music_player.queue import get_queue
-from src.music_player.services import get_playback_controller
+from src.music_player.services import get_audio_backend, get_playback_controller
 
 logger = get_logger(__name__)
 
@@ -38,7 +38,10 @@ class PlaybackBridge(QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        self._controller = get_playback_controller()
+        # Controller is None until init_audio() is called after window.show().
+        # Guards in every method that accesses _controller keep things safe
+        # during the brief startup window before audio is initialized.
+        self._controller = None
 
         # EOF state -- start True so the startup idle-active doesn't advance queue
         self._eof_seen         = True
@@ -65,8 +68,24 @@ class PlaybackBridge(QObject):
 
     # ── playback API ──────────────────────────────────────────────────
 
+    def init_audio(self) -> None:
+        """Initialize libmpv and the playback controller.
+
+        Must be called once from the main thread after Qt's window.show()
+        returns.  Deferring libmpv creation past HWND setup prevents an
+        access violation caused by libmpv's internal C threads racing with
+        Qt's Win32 window initialisation.
+        """
+        if self._controller is not None:
+            return
+        self._controller = get_playback_controller()
+        get_audio_backend().start_event_thread()
+        logger.info("PlaybackBridge: audio backend ready")
+
     def play_track(self, track: dict) -> None:
         """Start streaming a track immediately."""
+        if self._controller is None:
+            return
         self._eof_seen         = False
         self._eof_ignore_until = time.monotonic() + _EOF_GRACE_S
         self.status_message.emit("")
@@ -81,6 +100,8 @@ class PlaybackBridge(QObject):
         self._server_scrobble(track, submission=False)
 
     def play_pause(self) -> None:
+        if self._controller is None:
+            return
         if self._current_track is None:
             # Nothing loaded yet -- start playing the current queue item
             current = get_queue().current()
@@ -96,6 +117,8 @@ class PlaybackBridge(QObject):
             self.play_track(nxt)
 
     def previous_track(self) -> None:
+        if self._controller is None:
+            return
         if self._controller.time_pos > 3:
             self._controller.seek(0)
         else:
@@ -104,20 +127,28 @@ class PlaybackBridge(QObject):
                 self.play_track(prev)
 
     def stop(self) -> None:
+        if self._controller is None:
+            return
         self._eof_seen = True   # prevent idle-active from triggering queue advance
         self.status_message.emit("")
         self._controller.stop()
         self.playback_state_changed.emit(False)
 
     def seek(self, seconds: float) -> None:
+        if self._controller is None:
+            return
         self._controller.seek(seconds)
 
     def set_volume(self, volume: int) -> None:
+        if self._controller is None:
+            return
         self._controller.set_volume(volume)
 
     # ── polling ───────────────────────────────────────────────────────
 
     def _poll(self) -> None:
+        if self._controller is None:
+            return
         try:
             time_pos = self._controller.time_pos
             duration = self._controller.duration

@@ -88,7 +88,17 @@ class LoadingScreen(QWidget):
             # phase was already cached — pulse bar briefly
             self._bar.setValue(100)
 
+    def _emit_ready(self) -> None:
+        logger.info("loading: 300 ms elapsed — emitting ready")
+        try:
+            self.ready.emit()
+        except Exception as exc:
+            logger.error(f"loading: ready.emit() failed: {exc}", exc_info=True)
+
     def _on_finished(self) -> None:
+        logger.info("loading: worker finished — setting Ready state")
         self._bar.setValue(100)
         self._status.setText("Ready")
-        QTimer.singleShot(300, self.ready.emit)
+        logger.info("loading: scheduling ready signal in 300 ms")
+        QTimer.singleShot(300, self._emit_ready)
+        logger.info("loading: QTimer scheduled ok")

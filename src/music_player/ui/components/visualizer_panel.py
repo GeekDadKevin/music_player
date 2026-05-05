@@ -21,10 +21,10 @@ from PyQt6.QtWidgets import (
 )
 
 from src.music_player.logging import get_logger
-from src.music_player.ui.components.milkdrop_widget import (
-    AVAILABLE, MilkdropPlaceholder, MilkdropWidget,
-    default_preset_dir,
-)
+# milkdrop_widget is imported lazily in showEvent() so that projectM, GLEW,
+# PortAudio and their DLL dependencies are NOT loaded during app startup.
+# Loading those DLLs before the main window HWND is created can crash the
+# process via Win32 hooks registered in DllMain.
 from src.music_player.ui.components.playback_bridge import get_bridge
 from src.music_player.ui.glyphs import (
     CHEVRON_LEFT, CHEVRON_RIGHT, FULLSCREEN, MDL2_FAMILY_CSS, MDL2_FONT,
@@ -41,7 +41,8 @@ class VisualizerPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(240)
-        self._preset_dir = default_preset_dir() or ""
+        # Preset dir resolved lazily in showEvent() after milkdrop_widget imports.
+        self._preset_dir = ""
         self._preset_idx = 0
 
         # Lyrics state
@@ -72,11 +73,10 @@ class VisualizerPanel(QWidget):
         viz_lay = QVBoxLayout(self._viz_container)
         viz_lay.setContentsMargins(0, 0, 0, 0)
 
-        if AVAILABLE:
-            self._viz = MilkdropWidget(self._preset_dir, self._preset_idx)
-            self._viz.preset_changed.connect(self._on_preset_changed)
-        else:
-            self._viz = MilkdropPlaceholder()
+        # Plain dark widget — projectM/GLEW/PortAudio DLLs are not loaded yet.
+        # showEvent() replaces this with MilkdropWidget on first show.
+        self._viz = QWidget()
+        self._viz.setStyleSheet("background:#04040c;")
         viz_lay.addWidget(self._viz)
 
         # Lyrics overlay — absolutely positioned child of viz_container
@@ -125,6 +125,27 @@ class VisualizerPanel(QWidget):
 
         return bar
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if getattr(self, "_milkdrop_loaded", False):
+            return
+        self._milkdrop_loaded = True
+        # First show: load milkdrop_widget module (and its DLL deps) now that
+        # the main window HWND is fully created and stable.
+        from src.music_player.ui.components.milkdrop_widget import (
+            AVAILABLE, MilkdropWidget, default_preset_dir,
+        )
+        if not self._preset_dir:
+            self._preset_dir = default_preset_dir() or ""
+        if AVAILABLE:
+            real_viz = MilkdropWidget(self._preset_dir, self._preset_idx)
+            real_viz.preset_changed.connect(self._on_preset_changed)
+            lay = self._viz_container.layout()
+            lay.replaceWidget(self._viz, real_viz)
+            self._viz.deleteLater()
+            self._viz = real_viz
+            self._lyrics_lbl.raise_()
+
     def set_fullscreen_active(self, active: bool) -> None:
         """Called by MusicPlayerWindow when it enters/exits viz fullscreen."""
         self._btn_fs.setToolTip("Exit Fullscreen" if active else "Fullscreen")
@@ -149,7 +170,7 @@ class VisualizerPanel(QWidget):
     # ── preset cycling ────────────────────────────────────────────────
 
     def _cycle_preset(self, delta: int) -> None:
-        if isinstance(self._viz, MilkdropWidget):
+        if hasattr(self._viz, "next_preset"):
             if delta > 0:
                 self._viz.next_preset()
             else:
@@ -158,9 +179,8 @@ class VisualizerPanel(QWidget):
     @pyqtSlot(str)
     def _on_preset_changed(self, name: str) -> None:
         self._preset_lbl.setText(name)
-        self._preset_idx = (
-            self._viz.current_index() if isinstance(self._viz, MilkdropWidget) else self._preset_idx
-        )
+        if hasattr(self._viz, "current_index"):
+            self._preset_idx = self._viz.current_index()
 
     # ── bridge connections ────────────────────────────────────────────
 

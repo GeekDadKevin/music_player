@@ -57,9 +57,11 @@ def get_playback_controller():
     global _controller
     if _controller is None:
         from src.music_player.controller.playback_controller import PlaybackController
-        _controller = PlaybackController(
-            audio=get_audio_backend(),
-            stream=get_repository(),
-        )
+        # Create repository FIRST so its ssl context (httpx.Client) is
+        # established before libmpv.dll loads.  After libmpv loads, creating
+        # new ssl contexts crashes on Python 3.13.9 / Windows 11.
+        repo  = get_repository()
+        audio = get_audio_backend()
+        _controller = PlaybackController(audio=audio, stream=repo)
         logger.info("services: PlaybackController created")
     return _controller
