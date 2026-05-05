@@ -45,35 +45,51 @@ class MpvAudioBackend:
     """
 
     def __init__(self) -> None:
-        # Set before creating the player so the observer can reference it.
-        self._eof_event = threading.Event()
-
+        # audio-only: disable video/window/input to avoid Win32 hook conflicts.
+        # start_event_thread=False: defer the mpv event thread so it is NOT
+        # running during Qt's window.show().  Qt's native window initialisation
+        # (HWND creation, OpenGL context setup) triggers Python's cyclic GC,
+        # which in Python 3.13 finalises objects with __del__ that are in
+        # reference cycles.  MPV has internal cycles (_stream_protocol_cbs ->
+        # bound-method -> MPV); when GC finalises MPV it calls
+        # _mpv_terminate_destroy while the event thread is blocked in
+        # _mpv_wait_event, causing an access violation.  By deferring the
+        # thread start until after window.show() the event thread is never
+        # live during the dangerous window.  Call start_event_thread() once
+        # the Qt window is fully shown.
         self._player = mpv.MPV(
             ytdl=True,
-            input_default_bindings=True,
-            input_vo_keyboard=True,
+            video=False,                    # no video output, no VO window
+            input_default_bindings=False,   # no global keyboard shortcuts
+            input_vo_keyboard=False,        # no keyboard capture from VO
+            start_event_thread=False,       # started manually after window.show()
         )
+        logger.info("MpvAudioBackend initialised (event thread deferred)")
 
-        # idle-active becomes True when mpv has finished playing (track ended
-        # or stop() called) and False when mpv starts loading a new file.
-        # We set the event on True and clear it on False so that the brief
-        # idle-active=True transition that mpv emits when switching tracks
-        # (stopping old → loading new) does NOT leave the event permanently
-        # set and cause the queue to spuriously advance after the grace period.
-        @self._player.property_observer("idle-active")
-        def _on_idle(name: str, value: bool | None) -> None:
-            if value:
-                self._eof_event.set()
-            elif value is False:
-                self._eof_event.clear()
+    def start_event_thread(self) -> None:
+        """Start the mpv event-processing thread.
 
-        logger.info("MpvAudioBackend initialised")
+        Must be called once, after Qt's window.show() completes.  The thread
+        is created with the same parameters that python-mpv would use when
+        start_event_thread=True so that __del__ / terminate() still join it
+        correctly.
+        """
+        if self._player._event_thread is not None:
+            logger.warning("MpvAudioBackend: start_event_thread called twice — ignored")
+            return
+        t = threading.Thread(
+            target=self._player._loop,
+            name="MPVEventHandlerThread",
+            daemon=True,
+        )
+        self._player._event_thread = t
+        t.start()
+        logger.info("MpvAudioBackend: event thread started")
 
     # ── AudioPort implementation ──────────────────────────────────────
 
     def play(self, url: str) -> None:
         """Begin streaming url.  Stops any currently playing media first."""
-        self._eof_event.clear()
         self._player.play(url)
 
     def pause(self) -> None:
@@ -82,7 +98,6 @@ class MpvAudioBackend:
 
     def stop(self) -> None:
         """Stop playback and unload current media."""
-        self._eof_event.clear()
         self._player.stop()
 
     def set_volume(self, volume: int) -> None:
@@ -107,7 +122,7 @@ class MpvAudioBackend:
 
     @property
     def eof_reached(self) -> bool:
-        return self._eof_event.is_set()
+        return bool(self._player.idle_active)
 
 
 # Backward-compatibility alias so any code that imported AudioPlayer still works.

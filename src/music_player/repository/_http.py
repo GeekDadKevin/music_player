@@ -35,6 +35,19 @@ logger = get_logger(__name__)
 _API_VERSION = "1.16.1"
 _CLIENT_NAME = "music-player"
 
+# One shared httpx.Client for the whole process.  Creating a new Client
+# (and therefore a new ssl context) after libmpv.dll is loaded crashes on
+# Python 3.13.9 / Windows 11 with code 0xe24c4a02.  Call _get_session()
+# once in main() before any DLL loads to warm the ssl context early.
+_SHARED_SESSION: httpx.Client | None = None
+
+
+def _get_session() -> httpx.Client:
+    global _SHARED_SESSION
+    if _SHARED_SESSION is None:
+        _SHARED_SESSION = httpx.Client()
+    return _SHARED_SESSION
+
 
 class SubsonicHttp:
     """Low-level HTTP client for OpenSubsonic.
@@ -60,7 +73,7 @@ class SubsonicHttp:
                 "SUBSONIC_SERVER_URL, SUBSONIC_USERNAME, and SUBSONIC_PASSWORD "
                 "must all be set in the environment or .env file."
             )
-        self._session = httpx.Client()
+        self._session = _get_session()
 
     # ── public helpers ────────────────────────────────────────────────
 

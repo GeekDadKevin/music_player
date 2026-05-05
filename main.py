@@ -31,27 +31,29 @@ def main():
     import os
     import sys
 
-    # Force native desktop OpenGL (not ANGLE/D3D translation).
-    # Must happen before ANY PyQt6 import; Qt reads this at library load time.
-    # Without this, Qt may select ANGLE on Windows, whose EGL context does not
-    # expose wglGetProcAddress — so projectM's glad loader gets null pointers
-    # for every GL function and crashes with a null-write access violation.
-    os.environ.setdefault("QT_OPENGL", "desktop")
+    # NOTE: QT_OPENGL=desktop is intentionally NOT set here.  Forcing WGL
+    # (native desktop OpenGL) in Qt 6.11 triggers platform-plugin initialisation
+    # code inside CreateWindowExW that causes an access violation on first
+    # window.show().  projectM needs desktop GL, but milkdrop_widget is loaded
+    # lazily (only when the user opens the visualizer), so by then Qt has
+    # already created the main HWND without the forced WGL path.  The widget's
+    # own setFormat(3.3 Core) call in MilkdropWidget.__init__() is sufficient.
 
-    from PyQt6.QtGui import QSurfaceFormat
     from PyQt6.QtWidgets import QApplication
     from src.music_player.dns_cache import install as install_dns_cache
     from src.music_player.ui.app import MusicPlayerWindow
     from src.music_player.ui.loading_screen import LoadingScreen
 
-    # projectM 4.x requires OpenGL 3.3 core.  Must be set as the global
-    # default BEFORE QApplication so every GL context inherits this format.
-    _fmt = QSurfaceFormat()
-    _fmt.setVersion(3, 3)
-    _fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-    _fmt.setDepthBufferSize(24)
-    _fmt.setStencilBufferSize(8)
-    QSurfaceFormat.setDefaultFormat(_fmt)
+    # Establish the ONE shared httpx session (and its ssl context) before
+    # any native DLLs are loaded.  After libmpv.dll enters the process,
+    # creating new ssl contexts crashes on Python 3.13.9 / Windows 11
+    # (code 0xe24c4a02).  All SubsonicHttp instances share this session
+    # so no new ssl contexts are ever created post-DLL-load.
+    from src.music_player.repository._http import _get_session as _warm_http
+    _warm_http()
+    del _warm_http
+    # Also pre-import requests/urllib3 so their ssl init happens here too.
+    import requests as _req; _req.Session(); del _req
 
     install_dns_cache()
     app = QApplication(sys.argv)
@@ -60,13 +62,28 @@ def main():
     app.setStyle("Fusion")
     app.setPalette(_dark_palette())
 
-    window = MusicPlayerWindow()
+    # MusicPlayerWindow is created INSIDE on_ready() so it runs after the Qt
+    # event loop starts.  libmpv (MpvAudioBackend) is deferred further still:
+    # PlaybackBridge.init_audio() is called AFTER window.show() so libmpv's
+    # internal C threads never race with Qt's HWND creation.
     loading = LoadingScreen()
+    _window: list = []   # mutable cell so the closure can write to it
 
     def on_ready():
-        loading.close()
-        window._sidebar.refresh_playlist_thumbnails()
-        window.show()
+        from src.music_player.logging import get_logger as _get_logger
+        _log = _get_logger("main.on_ready")
+        try:
+            window = MusicPlayerWindow()
+            _window.append(window)
+            loading.close()
+            window._sidebar.refresh_playlist_thumbnails()
+            window.show()
+            # Initialize libmpv after Qt HWND is created so its C threads
+            # don't race with Win32 window initialisation.
+            from src.music_player.ui.components.playback_bridge import get_bridge
+            get_bridge().init_audio()
+        except Exception as exc:
+            _log.error(f"on_ready: EXCEPTION: {exc}", exc_info=True)
 
     loading.ready.connect(on_ready)
     loading.show()

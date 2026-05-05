@@ -90,7 +90,25 @@ def _load_lib(candidates: list[str]) -> ctypes.CDLL | None:
 
 
 _lib = _load_lib(["projectM-4", "libprojectM-4", "projectM", "libprojectM"])
-AVAILABLE = _lib is not None
+
+# projectM 4.1.x removed projectm_create_with_opengl_load_proc (GLAD variant)
+# and uses projectm_create() exclusively.  Earlier builds had both.
+# We require only projectm_create — the minimum needed to instantiate the engine.
+def _has_symbol(lib, name: str) -> bool:
+    if lib is None:
+        return False
+    try:
+        getattr(lib, name)
+        return True
+    except AttributeError:
+        return False
+
+AVAILABLE = _lib is not None and _has_symbol(_lib, "projectm_create")
+if _lib is not None and not AVAILABLE:
+    logger.warning("projectM DLL loaded but projectm_create is missing — visualizer disabled")
+elif _lib is not None:
+    logger.info("projectM DLL ready (projectm_create found)")
+
 ERROR_MSG = (
     "" if AVAILABLE else
     f"libprojectM-4 not found.\n\n"
@@ -112,7 +130,6 @@ def _fn(name: str, restype, *argtypes):
         f.argtypes = list(argtypes)
         return f
     except AttributeError:
-        logger.debug(f"projectM symbol not found: {name}")
         return None
 
 
@@ -306,6 +323,16 @@ class MilkdropWidget(QOpenGLWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        # Request 3.3 Core Profile on this widget specifically.  The global
+        # QSurfaceFormat.setDefaultFormat() is NOT called at startup because
+        # it forces Qt to create a Core Profile context for the main window's
+        # backing store, which crashes on some Windows/driver configurations.
+        fmt = QSurfaceFormat()
+        fmt.setVersion(3, 3)
+        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+        fmt.setDepthBufferSize(24)
+        fmt.setStencilBufferSize(8)
+        self.setFormat(fmt)
         self._preset_dir   = preset_dir or default_preset_dir() or ""
         self._start_index  = start_index
         self._pm: int      = 0
