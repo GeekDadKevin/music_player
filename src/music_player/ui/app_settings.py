@@ -26,6 +26,7 @@ _DEFAULTS = {
     "double_click_action": "play_now",
     "ext_track_color":     "#585858",
     "missing_track_color": "#c0392b",
+    "audio_output_device": "",
 }
 
 
@@ -37,6 +38,7 @@ class AppSettings:
     double_click_action: str  = "play_now"  # "play_now" | "play_now_keep" | "add_to_queue" | "play_next"
     ext_track_color:     str  = "#585858"   # ext-deezer / in catalog but not yet downloaded
     missing_track_color: str  = "#c0392b"   # not found anywhere in library or Deezer
+    audio_output_device: str  = ""          # soundcard speaker id; empty = system default
 
 
 # ── persistence ───────────────────────────────────────────────────────
@@ -59,6 +61,7 @@ def load_settings() -> AppSettings:
                 double_click_action = str(merged.get("double_click_action", "play_now")),
                 ext_track_color     = str(merged.get("ext_track_color",     "#585858")),
                 missing_track_color = str(merged.get("missing_track_color", "#c0392b")),
+                audio_output_device = str(merged.get("audio_output_device", "")),
             )
         else:
             _cache = AppSettings()

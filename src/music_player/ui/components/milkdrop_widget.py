@@ -246,42 +246,100 @@ def scan_presets(directory: str) -> list[Path]:
 # ── process-wide audio capture ────────────────────────────────────────────
 
 _audio_listeners: list[MilkdropWidget] = []
-_audio_mutex = threading.Lock()
-_audio_stream: sd.InputStream | None = None
+_audio_mutex     = threading.Lock()
+_audio_stream: sd.InputStream | None = None   # sounddevice fallback
+_capture_thread: threading.Thread | None = None
+_capture_stop   = threading.Event()
+_BLOCKSIZE      = 512
 
 
-def _audio_cb(indata: np.ndarray, frames: int, time_info, status) -> None:
-    data = indata.copy()
+def _push_samples(data: np.ndarray) -> None:
+    """Feed a (frames, channels) float32 array into every registered widget."""
+    if data.shape[1] == 1:
+        data = np.concatenate([data, data], axis=1)
+    flat = np.ascontiguousarray(data[:, :2], dtype=np.float32).flatten()
+    ptr  = flat.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
     with _audio_mutex:
         targets = list(_audio_listeners)
     for w in targets:
-        w._push_audio(data)
+        w._feed_audio(ptr, len(flat) // 2)
+
+
+def _soundcard_loop(speaker_id: str, rate: int) -> None:
+    """Background thread: read WASAPI loopback samples and feed projectM."""
+    import warnings
+    import soundcard as sc
+    # "data discontinuity in recording" fires whenever the loopback buffer
+    # has a gap (e.g. nothing playing).  It is harmless for a visualizer.
+    warnings.filterwarnings("ignore", message="data discontinuity", category=Warning)
+    try:
+        mic = sc.get_microphone(speaker_id, include_loopback=True)
+        with mic.recorder(samplerate=rate, channels=2, blocksize=_BLOCKSIZE) as rec:
+            logger.info(f"MilkDrop: soundcard loopback running ({mic.name!r} @ {rate}Hz)")
+            while not _capture_stop.is_set():
+                data = rec.record(numframes=_BLOCKSIZE)   # (frames, 2)
+                _push_samples(data)
+    except Exception as exc:
+        logger.warning(f"MilkDrop: soundcard loopback thread stopped: {exc}")
+
+
+def _sd_callback(indata: np.ndarray, frames: int, time_info, status) -> None:
+    _push_samples(indata)
 
 
 def _start_capture() -> None:
-    global _audio_stream
-    if _audio_stream is not None:
+    global _audio_stream, _capture_thread
+    if _capture_thread is not None or _audio_stream is not None:
         return
+
+    # 1. soundcard WASAPI loopback — captures the configured (or default)
+    #    speaker output so the visualizer reacts to exactly what mpv is playing.
+    #    sounddevice/PortAudio does not enumerate loopback devices on Windows;
+    #    soundcard wraps the Core Audio API directly and does.
     try:
-        try:
-            _audio_stream = sd.InputStream(
-                channels=2, samplerate=44100, dtype="float32",
-                blocksize=512, callback=_audio_cb,
-                extra_settings=sd.WasapiSettings(loopback=True),
+        import soundcard as sc
+        from src.music_player.ui.app_settings import load_settings
+        setting_id = load_settings().audio_output_device
+        if setting_id:
+            spk = next(
+                (s for s in sc.all_speakers() if s.id == setting_id),
+                sc.default_speaker(),
             )
-        except Exception:
-            _audio_stream = sd.InputStream(
-                channels=2, samplerate=44100, dtype="float32",
-                blocksize=512, callback=_audio_cb,
-            )
+        else:
+            spk = sc.default_speaker()
+        rate = 48000  # WASAPI loopback runs at the device's native rate
+        _capture_stop.clear()
+        t = threading.Thread(
+            target=_soundcard_loop, args=(spk.id, rate),
+            daemon=True, name="MilkDropLoopback",
+        )
+        _capture_thread = t
+        t.start()
+        return
+    except Exception as exc:
+        logger.debug(f"MilkDrop: soundcard unavailable: {exc}")
+        _capture_thread = None
+
+    # 2. sounddevice default input (microphone fallback)
+    try:
+        in_idx  = sd.default.device[0]
+        in_info = sd.query_devices(in_idx)
+        nch  = max(1, min(2, int(in_info.get("max_input_channels", 1))))
+        rate = int(in_info.get("default_samplerate", 44100))
+        _audio_stream = sd.InputStream(
+            device=in_idx, channels=nch, samplerate=rate,
+            dtype="float32", blocksize=_BLOCKSIZE, callback=_sd_callback,
+        )
         _audio_stream.start()
-        logger.info("MilkDrop: audio capture started")
+        logger.info(f"MilkDrop: microphone input started ({nch}ch @ {rate}Hz)")
     except Exception as exc:
         logger.warning(f"MilkDrop: audio capture unavailable — {exc}")
 
 
 def _stop_capture() -> None:
-    global _audio_stream
+    global _audio_stream, _capture_thread
+    _capture_stop.set()
+    _capture_thread = None
     if _audio_stream:
         try:
             _audio_stream.stop()
@@ -289,6 +347,16 @@ def _stop_capture() -> None:
         except Exception:
             pass
         _audio_stream = None
+
+
+def restart_capture() -> None:
+    """Stop and restart the audio loopback capture thread.
+
+    Call this after the audio output device setting changes while the
+    visualizer is open so the new device takes effect immediately.
+    """
+    _stop_capture()
+    _start_capture()
 
 
 def _register(w: MilkdropWidget) -> None:
@@ -339,9 +407,7 @@ class MilkdropWidget(QOpenGLWidget):
         self._presets: list[Path] = []
         self._idx: int     = start_index
         self._current_name = ""
-        self._pending: np.ndarray | None = None
         self._pending_load: tuple[int, bool] | None = None
-        self._audio_lock   = threading.Lock()
         self._cb_ref       = None   # keep ctypes callback alive
         self._gl_load_cb   = None   # keep GL loader callback alive
 
@@ -468,16 +534,8 @@ class MilkdropWidget(QOpenGLWidget):
 
         self._apply_pending_load()
 
-        with self._audio_lock:
-            data, self._pending = self._pending, None
-
-        if data is not None and _pm_pcm_add_float is not None:
-            try:
-                flat = np.ascontiguousarray(data, dtype=np.float32).flatten()
-                ptr  = flat.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-                _pm_pcm_add_float(self._pm, ptr, len(flat) // 2, _STEREO)
-            except Exception:
-                pass
+        # Audio is fed directly from the audio thread via _feed_audio();
+        # paintGL only needs to render.
 
         # Render into Qt's widget FBO. QOpenGLWidget always has its own FBO
         # bound when paintGL() is called; passing its ID explicitly ensures
@@ -510,10 +568,13 @@ class MilkdropWidget(QOpenGLWidget):
 
     # ── audio ──────────────────────────────────────────────────────────
 
-    def _push_audio(self, data: np.ndarray) -> None:
-        """Called from the audio thread."""
-        with self._audio_lock:
-            self._pending = data
+    def _feed_audio(self, ptr: ctypes.POINTER(ctypes.c_float), frames: int) -> None:
+        """Called from the audio thread — push samples directly into projectM."""
+        if self._pm and _pm_pcm_add_float:
+            try:
+                _pm_pcm_add_float(self._pm, ptr, frames, _STEREO)
+            except Exception:
+                pass
 
     # ── preset management ──────────────────────────────────────────────
 
@@ -525,6 +586,12 @@ class MilkdropWidget(QOpenGLWidget):
         if self._presets:
             self._idx = (self._idx - 1) % len(self._presets)
             self._load(self._idx, smooth=not hard_cut)
+
+    def random_preset(self) -> None:
+        if self._presets:
+            import random
+            self._idx = random.randrange(len(self._presets))
+            self._load(self._idx, smooth=False)
 
     def preset_count(self) -> int:
         return len(self._presets)

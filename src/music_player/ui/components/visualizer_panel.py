@@ -27,10 +27,14 @@ from src.music_player.logging import get_logger
 # process via Win32 hooks registered in DllMain.
 from src.music_player.ui.components.playback_bridge import get_bridge
 from src.music_player.ui.glyphs import (
-    CHEVRON_LEFT, CHEVRON_RIGHT, FULLSCREEN, MDL2_FAMILY_CSS, MDL2_FONT,
+    CHEVRON_LEFT, CHEVRON_RIGHT, FULLSCREEN, MDL2_FAMILY_CSS, MDL2_FONT, SHUFFLE,
 )
 
 logger = get_logger(__name__)
+
+_HEIGHT_MIN     = 160
+_HEIGHT_MAX     = 900
+_HEIGHT_DEFAULT = 300
 
 _ACCENT = "#2dd4bf"
 
@@ -40,7 +44,7 @@ class VisualizerPanel(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(240)
+        self.setMinimumHeight(_HEIGHT_MIN)
         # Preset dir resolved lazily in showEvent() after milkdrop_widget imports.
         self._preset_dir = ""
         self._preset_idx = 0
@@ -109,9 +113,11 @@ class VisualizerPanel(QWidget):
 
         lay.addSpacing(8)
 
-        # Nav arrows grouped on the right, then mode buttons
-        self._btn_prev = _nav_btn(f"{CHEVRON_LEFT} Prev", "Previous preset")
-        self._btn_next = _nav_btn(f"Next {CHEVRON_RIGHT}", "Next preset")
+        # Preset nav + Random
+        self._btn_random = _nav_btn(f"{SHUFFLE}", "Random preset")
+        self._btn_prev   = _nav_btn(f"{CHEVRON_LEFT} Prev", "Previous preset")
+        self._btn_next   = _nav_btn(f"Next {CHEVRON_RIGHT}", "Next preset")
+        lay.addWidget(self._btn_random)
         lay.addWidget(self._btn_prev)
         lay.addWidget(self._btn_next)
         lay.addSpacing(8)
@@ -119,19 +125,24 @@ class VisualizerPanel(QWidget):
         self._btn_fs = _glyph_btn(FULLSCREEN, "Fullscreen", 11)
         lay.addWidget(self._btn_fs)
 
+        self._btn_random.clicked.connect(self._random_preset)
         self._btn_prev.clicked.connect(lambda: self._cycle_preset(-1))
         self._btn_next.clicked.connect(lambda: self._cycle_preset(+1))
         self._btn_fs.clicked.connect(self.fullscreen_requested)
 
         return bar
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
+    def ensure_milkdrop_loaded(self) -> None:
+        """Load milkdrop_widget and swap in MilkdropWidget if available.
+
+        Call this BEFORE making the panel visible so replaceWidget() operates
+        on a hidden panel — inserting a QOpenGLWidget into an already-painted
+        layout causes Qt to briefly reconstitute the native compositing layer,
+        producing a visible window flash.
+        """
         if getattr(self, "_milkdrop_loaded", False):
             return
         self._milkdrop_loaded = True
-        # First show: load milkdrop_widget module (and its DLL deps) now that
-        # the main window HWND is fully created and stable.
         from src.music_player.ui.components.milkdrop_widget import (
             AVAILABLE, MilkdropWidget, default_preset_dir,
         )
@@ -145,6 +156,10 @@ class VisualizerPanel(QWidget):
             self._viz.deleteLater()
             self._viz = real_viz
             self._lyrics_lbl.raise_()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.ensure_milkdrop_loaded()
 
     def set_fullscreen_active(self, active: bool) -> None:
         """Called by MusicPlayerWindow when it enters/exits viz fullscreen."""
@@ -168,6 +183,10 @@ class VisualizerPanel(QWidget):
         self._lyrics_lbl.setGeometry(x, y, lw, lh)
 
     # ── preset cycling ────────────────────────────────────────────────
+
+    def _random_preset(self) -> None:
+        if hasattr(self._viz, "random_preset"):
+            self._viz.random_preset()
 
     def _cycle_preset(self, delta: int) -> None:
         if hasattr(self._viz, "next_preset"):

@@ -10,10 +10,13 @@ from PyQt6.QtWidgets import (
 _SETTINGS_FILE = Path.home() / ".music-player" / "window_state.ini"
 
 from src.music_player.logging import get_logger
+from src.music_player.services import get_audio_backend
+from src.music_player.ui.app_settings import load_settings, settings_signals
 from src.music_player.ui.components.library_page import LibraryPage
 from src.music_player.ui.components.player_bar import PlayerBar
 from src.music_player.ui.components.playlist_page import PlaylistPage
 from src.music_player.ui.components.queue_panel import QueuePanel
+from src.music_player.ui.components.settings_dialog import SettingsDialog
 from src.music_player.ui.components.visualizer_panel import VisualizerPanel
 from src.music_player.ui.glyphs import MDL2_FONT
 from src.music_player.ui.sidebar_widget import SidebarWidget
@@ -105,20 +108,38 @@ class MusicPlayerWindow(QMainWindow):
         splitter.setStretchFactor(2, 0)
         splitter.setSizes([280, 920, 0])
         self._splitter = splitter
-        root.addWidget(splitter, stretch=1)
 
         # ── visualizer panel (hidden by default) ─────────────────────
         self._viz_panel = VisualizerPanel()
         self._viz_panel.setVisible(False)
         self._viz_panel.fullscreen_requested.connect(self._toggle_viz_fullscreen)
-        root.addWidget(self._viz_panel)
+
+        # Vertical splitter: content area (top) + visualizer (bottom).
+        # Drag the handle to resize the visualizer height, just as you drag
+        # the sidebar handle to resize it horizontally.
+        _SPLITTER_STYLE = (
+            "QSplitter::handle { background: #1e1e22; }"
+            "QSplitter::handle:hover { background: #2dd4bf; }"
+        )
+        self._v_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._v_splitter.setHandleWidth(4)
+        self._v_splitter.setStyleSheet(_SPLITTER_STYLE)
+        self._v_splitter.addWidget(splitter)
+        self._v_splitter.addWidget(self._viz_panel)
+        self._v_splitter.setStretchFactor(0, 1)
+        self._v_splitter.setStretchFactor(1, 0)
+        self._v_splitter.setCollapsible(1, True)
+        root.addWidget(self._v_splitter, stretch=1)
 
         # ── player bar ───────────────────────────────────────────────
         self._player_bar = PlayerBar()
         self._player_bar.setFixedHeight(80)
         self._player_bar.queue_toggled.connect(self._toggle_queue)
         self._player_bar.visualizer_toggled.connect(self._toggle_visualizer)
+        self._player_bar.settings_clicked.connect(self._on_settings)
         root.addWidget(self._player_bar)
+
+        settings_signals().changed.connect(self._on_audio_device_changed)
 
         self._root_layout  = root
         self._viz_fullscreen = False
@@ -139,6 +160,7 @@ class MusicPlayerWindow(QMainWindow):
         s = QSettings(str(_SETTINGS_FILE), QSettings.Format.IniFormat)
         s.setValue("window/geometry", self.saveGeometry())
         s.setValue("window/splitter", self._splitter.sizes())
+        s.setValue("window/v_splitter", self._v_splitter.sizes())
 
     def _restore_state(self) -> None:
         s = QSettings(str(_SETTINGS_FILE), QSettings.Format.IniFormat)
@@ -154,6 +176,12 @@ class MusicPlayerWindow(QMainWindow):
         if sizes:
             try:
                 self._splitter.setSizes([int(x) for x in sizes])
+            except (TypeError, ValueError):
+                pass
+        v_sizes = s.value("window/v_splitter")
+        if v_sizes:
+            try:
+                self._v_splitter.setSizes([int(x) for x in v_sizes])
             except (TypeError, ValueError):
                 pass
 
@@ -190,6 +218,19 @@ class MusicPlayerWindow(QMainWindow):
                 from src.music_player.ui.components.playback_bridge import get_bridge
                 get_bridge().play_track(pin)
 
+    @pyqtSlot()
+    def _on_settings(self) -> None:
+        dlg = SettingsDialog(self)
+        dlg.exec()
+
+    @pyqtSlot()
+    def _on_audio_device_changed(self) -> None:
+        device_id = load_settings().audio_output_device
+        get_audio_backend().set_audio_device(device_id)
+        if getattr(self._viz_panel, "_milkdrop_loaded", False):
+            from src.music_player.ui.components.milkdrop_widget import restart_capture
+            restart_capture()
+
     def _toggle_queue(self) -> None:
         visible = not self._queue_panel.isVisible()
         self._queue_panel.setVisible(visible)
@@ -207,7 +248,18 @@ class MusicPlayerWindow(QMainWindow):
         if self._viz_fullscreen:
             self._exit_viz_fullscreen()
         else:
+            showing = not self._viz_panel.isVisible()
+            if showing:
+                self._viz_panel.ensure_milkdrop_loaded()
             self._viz_panel.setVisible(not self._viz_panel.isVisible())
+            if showing:
+                # Give the panel a sensible opening height if the splitter
+                # had it collapsed to zero.
+                sizes = self._v_splitter.sizes()
+                if sizes[1] < 10:
+                    total = sum(sizes)
+                    h = min(300, total // 3)
+                    self._v_splitter.setSizes([total - h, h])
 
     def _toggle_viz_fullscreen(self) -> None:
         if self._viz_fullscreen:
@@ -216,14 +268,13 @@ class MusicPlayerWindow(QMainWindow):
             self._enter_viz_fullscreen()
 
     def _enter_viz_fullscreen(self) -> None:
+        self._viz_panel.ensure_milkdrop_loaded()
         if not self._viz_panel.isVisible():
             self._viz_panel.setVisible(True)
+        # Hide the content splitter inside the vertical splitter — the viz
+        # panel then fills the entire vertical splitter area.
         self._splitter.hide()
         self._player_bar.hide()
-        # Give the visualizer panel all the stretch so it fills the window.
-        self._root_layout.setStretch(self._root_layout.indexOf(self._splitter),  0)
-        self._root_layout.setStretch(self._root_layout.indexOf(self._viz_panel), 1)
-        self._root_layout.setStretch(self._root_layout.indexOf(self._player_bar), 0)
         self._viz_panel.set_fullscreen_active(True)
         self._viz_fullscreen = True
         self.showFullScreen()
@@ -232,9 +283,6 @@ class MusicPlayerWindow(QMainWindow):
         self.showNormal()
         self._splitter.show()
         self._player_bar.show()
-        self._root_layout.setStretch(self._root_layout.indexOf(self._splitter),  1)
-        self._root_layout.setStretch(self._root_layout.indexOf(self._viz_panel), 0)
-        self._root_layout.setStretch(self._root_layout.indexOf(self._player_bar), 0)
         self._viz_panel.set_fullscreen_active(False)
         self._viz_fullscreen = False
 
