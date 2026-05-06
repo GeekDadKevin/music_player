@@ -39,6 +39,7 @@ def main():
     # already created the main HWND without the forced WGL path.  The widget's
     # own setFormat(3.3 Core) call in MilkdropWidget.__init__() is sufficient.
 
+    from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
     from src.music_player.dns_cache import install as install_dns_cache
     from src.music_player.ui.app import MusicPlayerWindow
@@ -56,6 +57,11 @@ def main():
     import requests as _req; _req.Session(); del _req
 
     install_dns_cache()
+    # Pre-create the shared OpenGL context before QApplication finishes init.
+    # Without this, Qt creates it lazily when the first QOpenGLWidget (MilkdropWidget)
+    # is first shown — which forces Qt to briefly reconstitute the window's native
+    # compositing layer, causing a visible window flash/blink.
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     # Fusion style + explicit dark palette forces dark rendering on all platforms
     # regardless of the OS light/dark mode setting.

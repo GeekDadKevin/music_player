@@ -1,6 +1,6 @@
 """Settings dialog — opened via the gear icon in the app header."""
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
@@ -40,6 +40,8 @@ class SettingsDialog(QDialog):
         root.setSpacing(0)
         root.setContentsMargins(0, 0, 0, 0)
 
+        root.addWidget(_section("Audio"))
+        root.addWidget(self._audio_panel())
         root.addWidget(_section("Appearance"))
         root.addWidget(self._appearance_panel())
         root.addWidget(_section("Playback"))
@@ -67,6 +69,47 @@ class SettingsDialog(QDialog):
         root.addSpacing(12)
 
     # ── panels ────────────────────────────────────────────────────────
+
+    def _audio_panel(self) -> QWidget:
+        panel = _panel()
+        layout = panel.layout()
+
+        row = QHBoxLayout()
+        row.addWidget(_label("Output Device"))
+        row.addStretch()
+
+        self._device_combo = QComboBox()
+        self._device_combo.setMinimumWidth(240)
+        self._device_combo.setStyleSheet(
+            "QComboBox{background:#1e1e22;color:#ddd;border:1px solid #2a2a2e;"
+            "border-radius:4px;padding:4px 8px;min-width:180px;}"
+            "QComboBox::drop-down{border:none;}"
+            "QComboBox QAbstractItemView{background:#1e1e22;color:#ddd;"
+            "border:1px solid #2a2a2e;selection-background-color:#2dd4bf;"
+            "selection-color:#000;}"
+        )
+        # First item is always "System Default" with empty data string
+        self._device_combo.addItem("System Default", "")
+        current_id = self._s.audio_output_device
+        current_index = 0
+        try:
+            import soundcard as sc
+            for speaker in sc.all_speakers():
+                self._device_combo.addItem(speaker.name, speaker.id)
+                if speaker.id == current_id:
+                    current_index = self._device_combo.count() - 1
+        except Exception as exc:
+            logger.warning(f"SettingsDialog: could not enumerate audio devices: {exc}")
+        self._device_combo.setCurrentIndex(current_index)
+
+        row.addWidget(self._device_combo)
+        layout.addLayout(row)
+        layout.addWidget(_hint(
+            "Select which audio device mpv uses for playback and which the "
+            "MilkDrop visualizer listens to for loopback capture. "
+            "'System Default' follows Windows' default output."
+        ))
+        return panel
 
     def _appearance_panel(self) -> QWidget:
         panel = _panel()
@@ -120,7 +163,7 @@ class SettingsDialog(QDialog):
                 lbl.setText(hex_color)
                 on_change(hex_color)
 
-        swatch.clicked.connect(_pick)
+        swatch.clicked.connect(lambda: _pick())
         row.addWidget(swatch)
         row.addWidget(value_lbl)
         col.addLayout(row)
@@ -225,6 +268,7 @@ class SettingsDialog(QDialog):
             double_click_action = self._dbl_click.currentData(),
             ext_track_color     = self._ext_track_color,
             missing_track_color = self._missing_track_color,
+            audio_output_device = self._device_combo.currentData() or "",
         )
         save_settings(updated)
         self.accept()

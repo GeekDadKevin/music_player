@@ -124,6 +124,41 @@ class MpvAudioBackend:
     def eof_reached(self) -> bool:
         return bool(self._player.idle_active)
 
+    def set_audio_device(self, speaker_id: str) -> None:
+        """Route mpv audio output to the speaker identified by speaker_id.
+
+        Args:
+            speaker_id: The ``soundcard`` speaker ``.id`` string.  An empty
+                string resets mpv to the system default (``auto``).
+        """
+        try:
+            if not speaker_id:
+                self._player.audio_device = "auto"
+                logger.info("MpvAudioBackend: audio device reset to auto (system default)")
+                return
+            import soundcard as sc
+            match = next((s for s in sc.all_speakers() if s.id == speaker_id), None)
+            if match is None:
+                logger.warning(
+                    f"MpvAudioBackend: speaker id {speaker_id!r} not found — "
+                    "falling back to auto"
+                )
+                self._player.audio_device = "auto"
+                return
+            self._player.audio_device = f"wasapi/{match.name}"
+            logger.info(
+                f"MpvAudioBackend: audio device set to wasapi/{match.name!r}"
+            )
+        except Exception as exc:
+            logger.warning(
+                f"MpvAudioBackend: set_audio_device failed ({exc}) — "
+                "falling back to auto"
+            )
+            try:
+                self._player.audio_device = "auto"
+            except Exception:
+                pass
+
 
 # Backward-compatibility alias so any code that imported AudioPlayer still works.
 AudioPlayer = MpvAudioBackend

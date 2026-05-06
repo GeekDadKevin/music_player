@@ -11,7 +11,7 @@ from src.music_player.ui.app_settings import load_settings, settings_signals
 from src.music_player.ui.components.playback_bridge import get_bridge
 from src.music_player.ui.glyphs import (
     ADD, FULLSCREEN, HEART, HEART_FILLED,
-    MDL2_FONT, NEXT, PAUSE, PLAY, PREV, QUEUE, REPEAT, SHUFFLE, VISUALIZER, VOLUME,
+    MDL2_FONT, NEXT, PAUSE, PLAY, PREV, QUEUE, REPEAT, SETTINGS, SHUFFLE, VISUALIZER, VOLUME,
 )
 
 logger = get_logger(__name__)
@@ -31,6 +31,7 @@ def _accent() -> str:
 class PlayerBar(QWidget):
     queue_toggled      = pyqtSignal()   # emitted when the queue button is clicked
     visualizer_toggled = pyqtSignal()   # emitted when the visualizer button is clicked
+    settings_clicked   = pyqtSignal()   # emitted when the settings button is clicked
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -162,12 +163,14 @@ class PlayerBar(QWidget):
         right.setContentsMargins(0, 0, 0, 0)
         right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        self._btn_queue = _small_btn(QUEUE,      "Queue",        12)
-        self._btn_viz   = _small_btn(VISUALIZER, "Visualizer",   12)
-        self._btn_vol   = _small_btn(VOLUME,     "Volume",       12)
-        self._btn_extra = _small_btn(FULLSCREEN, "Cast",         11)
+        self._btn_queue    = _small_btn(QUEUE,      "Queue",        12)
+        self._btn_viz      = _small_btn(VISUALIZER, "Visualizer",   12)
+        self._btn_vol      = _small_btn(VOLUME,     "Volume",       12)
+        self._btn_extra    = _small_btn(FULLSCREEN, "Cast",         11)
+        self._btn_settings = _small_btn(SETTINGS,   "Settings",     12)
 
-        for b in (self._btn_queue, self._btn_viz, self._btn_vol, self._btn_extra):
+        for b in (self._btn_queue, self._btn_viz, self._btn_vol,
+                  self._btn_extra, self._btn_settings):
             right.addWidget(b)
 
         right_w = QWidget()
@@ -196,6 +199,7 @@ class PlayerBar(QWidget):
         self.slider.sliderReleased.connect(self._on_seek_end)
         self._btn_queue.clicked.connect(self.queue_toggled)
         self._btn_viz.clicked.connect(self.visualizer_toggled)
+        self._btn_settings.clicked.connect(self.settings_clicked)
 
         bridge.set_volume(80)
 
